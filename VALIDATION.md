@@ -123,3 +123,10 @@ JavaScript 语法检查、Shell 语法检查和 Release 编译通过。Command L
 - 截图只使用专门生成的示例文档，通过 macOS 窗口截图接口截取单个应用窗口，未截取用户桌面或私人文档。四张图均经过查看，清理了测试草稿提示，保留真实窗口控件与应用内容。
 - 新增仅 Debug 可用的 `--screenshots` 入口以及重现说明，输出保存在本机 `.build/screenshots/`，公开图片位于 `docs/screenshots/`。不在 Release 中包含截图工具代码。
 - 本轮只增加截图和介绍、截图辅助入口及版本信息；未改变文档编辑逻辑。验证包括 Debug 截图运行、四个图片引用完整性、Release 构建、应用签名及 0.1.8（构建号 9）一致性。
+
+## 0.1.9 关于窗口
+
+- “关于 EasyMarkdown”使用系统原生关于面板，显式显示打包的 AppIcon、来自应用元数据的版本和构建号，以及带 `.link` 属性的 GitHub 仓库地址。名称和链接为 `EasyMarkdown` / `https://github.com/OldSixYao/EasyMarkdown`。
+- 新增检查验证图标对象、版本来源和仓库富文本链接属性。完整窗口回归最终 18 组通过，Release 构建与签名校验通过；未自动触发浏览器跳转或截图验证原生关于面板外观。
+- 首次完整回归遇到已记录的撤销分组间歇失败，第二次完整运行通过。本轮没有修改撤销实现或文档保存行为。
+- 按补充要求精简 README 为功能与截图；新增 CHANGELOG.md 集中版本记录，并迁移构建/使用/验证说明到 docs/DEVELOPMENT.md、性能记录到 docs/PERFORMANCE.md。项目规则同步更新，后续升级不再要求在 README 标注版本；本轮仍为 0.1.9。

@@ -146,6 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings?.showWindow(nil)
     }
 
+    @objc func showAbout(_ sender: Any?) { AboutPanel.show() }
+
     private var currentSession: DocumentSession? {
         (NSDocumentController.shared.currentDocument as? MarkdownDocument)?.session
     }
@@ -194,7 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return value
         }
         let app = submenu("EasyMarkdown")
-        item(app, "关于 EasyMarkdown", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", NSApp)
+        item(app, "关于 EasyMarkdown", #selector(showAbout(_:)), "", self)
         app.addItem(.separator())
         item(app, "设置…", #selector(showSettings(_:)), ",", self)
         app.addItem(.separator())

@@ -23,6 +23,18 @@ import EasyMarkdownCore
                 throw Failure(message: "Packaged app icon is missing or invalid")
             }
             results.append("Packaged macOS icon is configured and includes a 1024-pixel representation")
+            let about = AboutPanel.options()
+            guard about[.applicationIcon] is NSImage,
+                  about[.applicationVersion] as? String == Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                  let credits = about[.credits] as? NSAttributedString else {
+                throw Failure(message: "About panel is missing its app icon or version")
+            }
+            let repositoryRange = (credits.string as NSString).range(of: "github.com/OldSixYao/EasyMarkdown")
+            guard repositoryRange.location != NSNotFound,
+                  credits.attribute(.link, at: repositoryRange.location, effectiveRange: nil) as? URL == AboutPanel.repositoryURL else {
+                throw Failure(message: "About panel repository is not a clickable link")
+            }
+            results.append("About panel includes the app icon, bundle version and clickable GitHub repository link")
             (NSApp.delegate as? AppDelegate)?.showWelcome(nil)
             try await Task.sleep(for: .milliseconds(200))
             guard let welcome = NSApp.windows.first(where: { $0.title == "EasyMarkdown" }),
