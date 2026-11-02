@@ -1,0 +1,1010 @@
+{
+  "version": "0.1.5",
+  "baselineVersion": "0.1.4",
+  "date": "2026-11-02",
+  "inputBytes": 89091,
+  "sections": 300,
+  "method": "Independent Release launches via Launch Services, app plus attributed WebKit phys_footprint. 3 memory samples per stage, 2 complete baseline and 2 final runs. JS synchronous renderer timings exclude native debounce/IPC. 20 localized updates + 10 unchanged updates; 200 mapping calls. Native highlight timing is 20 repeated calls on the same editor text.",
+  "watcherSetup": "Directory watcher setup is excluded from the deep harness only; production watcher now opens asynchronously. Normal application regressions still exercise directory watching.",
+  "variants": {
+    "baseline": [
+      "baseline-3",
+      "baseline-4"
+    ],
+    "incrementalDOM": [
+      "incremental-1"
+    ],
+    "temporaryHighlightsAndBinaryMapping": [
+      "optimized-1",
+      "optimized-2"
+    ],
+    "finalWithoutNativeThumbnail": [
+      "final-1",
+      "final-2"
+    ]
+  },
+  "rejected": {
+    "nativeThumbnail": {
+      "beforeRun": "baseline-image",
+      "trialRun": "optimized-image",
+      "reason": "6000x4000 PNG cold-image sample increased total footprint from 143.03 to 194.85 MiB. Native thumbnailing was removed; source dimensions and bytes are preserved."
+    },
+    "initialWrapperElision": {
+      "runs": [
+        "winner-1",
+        "winner-2"
+      ],
+      "reason": "Omitting temporary sanitizer groups for ordinary Markdown did not reduce initial reading memory and made post-update memory less consistent. Reverted to the previously measured final-1/final-2 implementation."
+    }
+  },
+  "excluded": {
+    "baseline-1": "Incomplete baseline due to benchmark async result overload error; no valid timing data.",
+    "baseline-2": "Blocked in directory watcher setup, sampled on main-thread open(); not a renderer measurement."
+  },
+  "limitations": [
+    "Two repeats and one synthetic document, not a population benchmark.",
+    "Static-reading and image-only memory reductions are not established.",
+    "processPeakSumMiB adds separate process lifetime peaks, NOT a simultaneous total-memory peak.",
+    "deep_closed retains benchmark reader/editor references and is excluded from close-release conclusions; use the normal lifecycle regression instead.",
+    "No CPU energy or long-duration soak measurements."
+  ],
+  "runs": {
+    "baseline-3": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 194.52,
+          "mainMiB": 45.33,
+          "processPeakSumMiB": 254.71
+        },
+        "after_continuous_render": {
+          "totalMiB": 407.21,
+          "mainMiB": 77.47,
+          "processPeakSumMiB": 751.3
+        },
+        "large_image": {
+          "totalMiB": 216.72,
+          "mainMiB": 79.38,
+          "processPeakSumMiB": 763.16
+        },
+        "deep_closed": {
+          "totalMiB": 145.74,
+          "mainMiB": 79.78,
+          "processPeakSumMiB": 763.16
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 19.0,
+          "p95": 23,
+          "samples": [
+            24,
+            23,
+            20,
+            20,
+            20,
+            20,
+            19,
+            19,
+            18,
+            18,
+            18,
+            19,
+            18,
+            18,
+            17,
+            18,
+            19,
+            18,
+            21,
+            18
+          ]
+        },
+        "sameRenderMs": {
+          "median": 18.0,
+          "p95": 19,
+          "samples": [
+            17,
+            18,
+            19,
+            18,
+            18,
+            17,
+            19,
+            18,
+            17,
+            18
+          ]
+        },
+        "highlightMs": {
+          "median": 1.0376,
+          "p95": 1.1296,
+          "samples": [
+            1.1296248994767666,
+            1.0899580083787441,
+            1.0348334908485413,
+            1.0341666638851166,
+            1.0542087256908417,
+            1.0522501543164253,
+            1.0224580764770508,
+            1.1322498321533203,
+            1.036541536450386,
+            1.0360833257436752,
+            1.0729581117630005,
+            1.0427501983940601,
+            1.0409583337605,
+            1.0530832223594189,
+            0.9997081942856312,
+            1.0332497768104076,
+            1.00620836019516,
+            1.038708258420229,
+            1.0358751751482487,
+            1.0075420141220093
+          ]
+        },
+        "mapping200Ms": 81,
+        "imagePreviewPixels": 6000,
+        "inputBytes": 89091
+      }
+    },
+    "baseline-4": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 193.49,
+          "mainMiB": 57.47,
+          "processPeakSumMiB": 273.57
+        },
+        "after_continuous_render": {
+          "totalMiB": 245.61,
+          "mainMiB": 87.42,
+          "processPeakSumMiB": 771.1
+        },
+        "large_image": {
+          "totalMiB": 269.02,
+          "mainMiB": 77.91,
+          "processPeakSumMiB": 784.49
+        },
+        "deep_closed": {
+          "totalMiB": 215.54,
+          "mainMiB": 77.94,
+          "processPeakSumMiB": 784.49
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 19.0,
+          "p95": 22,
+          "samples": [
+            23,
+            21,
+            18,
+            20,
+            20,
+            19,
+            19,
+            19,
+            18,
+            19,
+            19,
+            18,
+            19,
+            17,
+            19,
+            17,
+            18,
+            18,
+            18,
+            22
+          ]
+        },
+        "sameRenderMs": {
+          "median": 18.0,
+          "p95": 19,
+          "samples": [
+            18,
+            17,
+            19,
+            18,
+            18,
+            18,
+            18,
+            19,
+            18,
+            18
+          ]
+        },
+        "highlightMs": {
+          "median": 1.3746,
+          "p95": 1.5733,
+          "samples": [
+            1.8232916481792927,
+            1.5732916072010994,
+            1.3723750598728657,
+            1.5681665390729904,
+            1.3405000790953636,
+            1.5470413491129875,
+            1.5180832706391811,
+            1.3317503035068512,
+            1.3851248659193516,
+            1.3858750462532043,
+            1.3829167000949383,
+            1.4065830036997795,
+            1.3130418956279755,
+            1.3396251015365124,
+            1.3323747552931309,
+            1.3768747448921204,
+            1.2372499331831932,
+            1.2230835855007172,
+            1.2414585798978806,
+            1.2426665052771568
+          ]
+        },
+        "mapping200Ms": 74,
+        "imagePreviewPixels": 6000,
+        "inputBytes": 89091
+      }
+    },
+    "incremental-1": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 197.68,
+          "mainMiB": 45.2,
+          "processPeakSumMiB": 261.28
+        },
+        "after_continuous_render": {
+          "totalMiB": 258.3,
+          "mainMiB": 77.27,
+          "processPeakSumMiB": 519.36
+        },
+        "large_image": {
+          "totalMiB": 248.54,
+          "mainMiB": 79.52,
+          "processPeakSumMiB": 544.6
+        },
+        "deep_closed": {
+          "totalMiB": 236.68,
+          "mainMiB": 79.38,
+          "processPeakSumMiB": 544.6
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 5.0,
+          "p95": 7,
+          "samples": [
+            7,
+            6,
+            6,
+            6,
+            5,
+            6,
+            8,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            4,
+            5,
+            5,
+            5,
+            5
+          ]
+        },
+        "sameRenderMs": {
+          "median": 5.0,
+          "p95": 7,
+          "samples": [
+            7,
+            4,
+            5,
+            6,
+            4,
+            5,
+            5,
+            4,
+            5,
+            6
+          ]
+        },
+        "highlightMs": {
+          "median": 1.0341,
+          "p95": 1.1455,
+          "samples": [
+            1.1918330565094948,
+            1.0477914474904537,
+            1.0276250541210175,
+            1.059624832123518,
+            1.145500224083662,
+            1.0398332960903645,
+            1.0106246918439865,
+            0.9931665845215321,
+            1.0548336431384087,
+            1.0318746790289879,
+            1.1128750629723072,
+            1.0065003298223019,
+            1.0002916678786278,
+            1.0028332471847534,
+            1.0235835798084736,
+            1.1289999820291996,
+            1.0363748297095299,
+            0.9951665997505188,
+            1.0090419091284275,
+            1.102916430681944
+          ]
+        },
+        "mapping200Ms": 79,
+        "imagePreviewPixels": 6000,
+        "inputBytes": 89091
+      }
+    },
+    "optimized-1": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 168.14,
+          "mainMiB": 45.36,
+          "processPeakSumMiB": 258.18
+        },
+        "after_continuous_render": {
+          "totalMiB": 215.49,
+          "mainMiB": 75.66,
+          "processPeakSumMiB": 372.85
+        },
+        "large_image": {
+          "totalMiB": 254.68,
+          "mainMiB": 86.36,
+          "processPeakSumMiB": 404.47
+        },
+        "deep_closed": {
+          "totalMiB": 207.86,
+          "mainMiB": 85.69,
+          "processPeakSumMiB": 404.47
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 5.0,
+          "p95": 6,
+          "samples": [
+            6,
+            5,
+            5,
+            7,
+            6,
+            5,
+            5,
+            5,
+            5,
+            4,
+            4,
+            5,
+            4,
+            4,
+            4,
+            5,
+            4,
+            4,
+            4,
+            4
+          ]
+        },
+        "sameRenderMs": {
+          "median": 4.0,
+          "p95": 5,
+          "samples": [
+            5,
+            4,
+            4,
+            4,
+            3,
+            4,
+            4,
+            4,
+            4,
+            4
+          ]
+        },
+        "highlightMs": {
+          "median": 0.5366,
+          "p95": 0.6696,
+          "samples": [
+            0.6759166717529297,
+            0.5576666444540024,
+            0.5357083864510059,
+            0.5408748984336853,
+            0.5260417237877846,
+            0.508500263094902,
+            0.5230833776295185,
+            0.5304166115820408,
+            0.5840002559125423,
+            0.5569583736360073,
+            0.5178335122764111,
+            0.5073333159089088,
+            0.5112499929964542,
+            0.5383333191275597,
+            0.5034585483372211,
+            0.6694584153592587,
+            0.6695836782455444,
+            0.5654999986290932,
+            0.5374583415687084,
+            0.5169585347175598
+          ]
+        },
+        "mapping200Ms": 1,
+        "imagePreviewPixels": 2048,
+        "inputBytes": 89091
+      }
+    },
+    "optimized-2": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 243.71,
+          "mainMiB": 58.36,
+          "processPeakSumMiB": 294.78
+        },
+        "after_continuous_render": {
+          "totalMiB": 199.38,
+          "mainMiB": 85.24,
+          "processPeakSumMiB": 402.21
+        },
+        "large_image": {
+          "totalMiB": 255.02,
+          "mainMiB": 85.38,
+          "processPeakSumMiB": 429.71
+        },
+        "deep_closed": {
+          "totalMiB": 181.63,
+          "mainMiB": 85.38,
+          "processPeakSumMiB": 429.71
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 5.0,
+          "p95": 6,
+          "samples": [
+            7,
+            6,
+            5,
+            6,
+            6,
+            5,
+            6,
+            5,
+            5,
+            5,
+            5,
+            4,
+            5,
+            5,
+            4,
+            6,
+            5,
+            5,
+            4,
+            5
+          ]
+        },
+        "sameRenderMs": {
+          "median": 4.0,
+          "p95": 5,
+          "samples": [
+            4,
+            5,
+            4,
+            4,
+            4,
+            5,
+            4,
+            4,
+            4,
+            4
+          ]
+        },
+        "highlightMs": {
+          "median": 0.6248,
+          "p95": 0.6784,
+          "samples": [
+            0.7628332823514938,
+            0.6783748976886272,
+            0.6446251645684242,
+            0.5760416388511658,
+            0.5527501925826073,
+            0.6637913174927235,
+            0.6762919947504997,
+            0.6221248768270016,
+            0.5469587631523609,
+            0.6275414489209652,
+            0.5180416628718376,
+            0.5402085371315479,
+            0.5786251276731491,
+            0.5610417574644089,
+            0.49833348020911217,
+            0.6613750010728836,
+            0.675249844789505,
+            0.6288336589932442,
+            0.598458107560873,
+            0.6754579953849316
+          ]
+        },
+        "mapping200Ms": 1,
+        "imagePreviewPixels": 2048,
+        "inputBytes": 89091
+      }
+    },
+    "final-1": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 209.47,
+          "mainMiB": 45.77,
+          "processPeakSumMiB": 237.8
+        },
+        "after_continuous_render": {
+          "totalMiB": 215.93,
+          "mainMiB": 75.81,
+          "processPeakSumMiB": 373.19
+        },
+        "large_image": {
+          "totalMiB": 258.49,
+          "mainMiB": 75.92,
+          "processPeakSumMiB": 386.54
+        },
+        "deep_closed": {
+          "totalMiB": 187.91,
+          "mainMiB": 75.99,
+          "processPeakSumMiB": 470.35
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 5.0,
+          "p95": 6,
+          "samples": [
+            7,
+            6,
+            6,
+            6,
+            5,
+            5,
+            6,
+            6,
+            6,
+            5,
+            5,
+            5,
+            4,
+            5,
+            5,
+            4,
+            4,
+            5,
+            4,
+            5
+          ]
+        },
+        "sameRenderMs": {
+          "median": 4.0,
+          "p95": 5,
+          "samples": [
+            4,
+            4,
+            4,
+            4,
+            4,
+            3,
+            5,
+            3,
+            4,
+            4
+          ]
+        },
+        "highlightMs": {
+          "median": 0.5529,
+          "p95": 0.6852,
+          "samples": [
+            0.6980416364967823,
+            0.6307084113359451,
+            0.685208011418581,
+            0.6580417975783348,
+            0.5735829472541809,
+            0.521958339959383,
+            0.5736248567700386,
+            0.5272082053124905,
+            0.5748746916651726,
+            0.56470837444067,
+            0.5926252342760563,
+            0.5311663262546062,
+            0.5410835146903992,
+            0.5066250450909138,
+            0.5044997669756413,
+            0.5016252398490906,
+            0.5015833303332329,
+            0.5117915570735931,
+            0.5673747509717941,
+            0.529041513800621
+          ]
+        },
+        "mapping200Ms": 1,
+        "imagePreviewPixels": 6000,
+        "inputBytes": 89091
+      }
+    },
+    "final-2": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 210.46,
+          "mainMiB": 57.31,
+          "processPeakSumMiB": 278.94
+        },
+        "after_continuous_render": {
+          "totalMiB": 187.54,
+          "mainMiB": 86.06,
+          "processPeakSumMiB": 354.77
+        },
+        "large_image": {
+          "totalMiB": 188.39,
+          "mainMiB": 74.3,
+          "processPeakSumMiB": 359.71
+        },
+        "deep_closed": {
+          "totalMiB": 159.54,
+          "mainMiB": 74.19,
+          "processPeakSumMiB": 359.71
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 5.0,
+          "p95": 6,
+          "samples": [
+            8,
+            6,
+            5,
+            5,
+            5,
+            5,
+            4,
+            6,
+            4,
+            5,
+            4,
+            4,
+            5,
+            5,
+            4,
+            4,
+            4,
+            5,
+            4,
+            4
+          ]
+        },
+        "sameRenderMs": {
+          "median": 4.0,
+          "p95": 5,
+          "samples": [
+            4,
+            4,
+            5,
+            4,
+            4,
+            4,
+            4,
+            4,
+            5,
+            4
+          ]
+        },
+        "highlightMs": {
+          "median": 0.7804,
+          "p95": 0.8918,
+          "samples": [
+            1.0057920590043068,
+            0.8917916566133499,
+            0.8761249482631683,
+            0.87741669267416,
+            0.8685416541993618,
+            0.8683335036039352,
+            0.8641248568892479,
+            0.7765414193272591,
+            0.7756249979138374,
+            0.7811663672327995,
+            0.7780413143336773,
+            0.7815002463757992,
+            0.779083464294672,
+            0.7814997807145119,
+            0.779708381742239,
+            0.7759165018796921,
+            0.7734997197985649,
+            0.7178336381912231,
+            0.7084999233484268,
+            0.7112082093954086
+          ]
+        },
+        "mapping200Ms": 1,
+        "imagePreviewPixels": 6000,
+        "inputBytes": 89091
+      }
+    },
+    "baseline-image": {
+      "memory": {
+        "image_only": {
+          "totalMiB": 143.03,
+          "mainMiB": 56.75,
+          "processPeakSumMiB": 188.69
+        }
+      },
+      "timing": {
+        "imagePreviewPixels": 6000,
+        "openAndImageMs": 3046.249041799456
+      }
+    },
+    "optimized-image": {
+      "memory": {
+        "image_only": {
+          "totalMiB": 194.85,
+          "mainMiB": 68.06,
+          "processPeakSumMiB": 267.32
+        }
+      },
+      "timing": {
+        "imagePreviewPixels": 2048,
+        "openAndImageMs": 1691.2582502700388
+      }
+    },
+    "final-image": {
+      "memory": {
+        "image_only": {
+          "totalMiB": 164.16,
+          "mainMiB": 44.56,
+          "processPeakSumMiB": 183.35
+        }
+      },
+      "timing": {
+        "imagePreviewPixels": 6000,
+        "openAndImageMs": 440.6840414740145
+      }
+    },
+    "winner-1": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 232.77,
+          "mainMiB": 45.59,
+          "processPeakSumMiB": 254.27
+        },
+        "after_continuous_render": {
+          "totalMiB": 335.54,
+          "mainMiB": 86.85,
+          "processPeakSumMiB": 446.54
+        },
+        "large_image": {
+          "totalMiB": 171.96,
+          "mainMiB": 77.47,
+          "processPeakSumMiB": 458.41
+        },
+        "deep_closed": {
+          "totalMiB": 147.52,
+          "mainMiB": 76.78,
+          "processPeakSumMiB": 458.41
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 5.0,
+          "p95": 5,
+          "samples": [
+            6,
+            5,
+            5,
+            5,
+            5,
+            5,
+            4,
+            4,
+            5,
+            5,
+            4,
+            5,
+            4,
+            5,
+            4,
+            5,
+            4,
+            4,
+            5,
+            4
+          ]
+        },
+        "highlightMs": {
+          "median": 0.6025,
+          "p95": 0.7611,
+          "samples": [
+            0.6895414553582668,
+            0.6470000371336937,
+            0.5664164200425148,
+            0.5728332325816154,
+            0.5222498439252377,
+            0.6425837054848671,
+            0.7878746837377548,
+            0.6838333792984486,
+            0.7611247710883617,
+            0.6163334473967552,
+            0.5726250819861889,
+            0.5484167486429214,
+            0.5066669546067715,
+            0.5032913759350777,
+            0.5098748952150345,
+            0.6265835836529732,
+            0.6827497854828835,
+            0.6281663663685322,
+            0.5885832943022251,
+            0.5764164961874485
+          ]
+        },
+        "imagePreviewPixels": 6000,
+        "inputBytes": 89091,
+        "mapping200Ms": 1,
+        "sameRenderMs": {
+          "median": 4.0,
+          "p95": 5,
+          "samples": [
+            5,
+            4,
+            4,
+            4,
+            4,
+            3,
+            5,
+            3,
+            4,
+            4
+          ]
+        }
+      }
+    },
+    "winner-2": {
+      "memory": {
+        "deep_read": {
+          "totalMiB": 206.5,
+          "mainMiB": 45.7,
+          "processPeakSumMiB": 276.36
+        },
+        "after_continuous_render": {
+          "totalMiB": 175.64,
+          "mainMiB": 84.85,
+          "processPeakSumMiB": 368.93
+        },
+        "large_image": {
+          "totalMiB": 197.44,
+          "mainMiB": 75.3,
+          "processPeakSumMiB": 374.24
+        },
+        "deep_closed": {
+          "totalMiB": 160.44,
+          "mainMiB": 75.16,
+          "processPeakSumMiB": 374.24
+        }
+      },
+      "timing": {
+        "changingRenderMs": {
+          "median": 4.5,
+          "p95": 6,
+          "samples": [
+            8,
+            6,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            4,
+            5,
+            4,
+            4,
+            4,
+            4,
+            4,
+            4,
+            4,
+            4,
+            5,
+            4
+          ]
+        },
+        "highlightMs": {
+          "median": 0.8727,
+          "p95": 1.1322,
+          "samples": [
+            1.2039169669151306,
+            1.0528750717639923,
+            1.1321669444441795,
+            1.115291379392147,
+            1.010499894618988,
+            0.9165420196950436,
+            0.8729998953640461,
+            0.8732499554753304,
+            0.8714166469871998,
+            0.8695833384990692,
+            0.8739582262933254,
+            0.8747917599976063,
+            0.8723330684006214,
+            0.8672499097883701,
+            0.798291526734829,
+            0.7817503064870834,
+            0.7794583216309547,
+            0.7806248031556606,
+            0.7764166221022606,
+            0.7764170877635479
+          ]
+        },
+        "imagePreviewPixels": 6000,
+        "inputBytes": 89091,
+        "mapping200Ms": 1,
+        "sameRenderMs": {
+          "median": 4.0,
+          "p95": 5,
+          "samples": [
+            4,
+            4,
+            3,
+            5,
+            4,
+            4,
+            4,
+            4,
+            4,
+            3
+          ]
+        }
+      }
+    }
+  },
+  "comparison": {
+    "deep_read": {
+      "beforeMiB": 194.0,
+      "afterMiB": 209.97,
+      "reductionPercent": -8.2
+    },
+    "after_continuous_render": {
+      "beforeMiB": 326.41,
+      "afterMiB": 201.74,
+      "reductionPercent": 38.2
+    },
+    "large_image": {
+      "beforeMiB": 242.87,
+      "afterMiB": 223.44,
+      "reductionPercent": 8.0
+    },
+    "changingRenderMs": {
+      "beforeMs": 19.0,
+      "afterMs": 5.0,
+      "reductionPercent": 73.7
+    },
+    "sameRenderMs": {
+      "beforeMs": 18.0,
+      "afterMs": 4.0,
+      "reductionPercent": 77.8
+    },
+    "highlightMs": {
+      "beforeMs": 1.2061,
+      "afterMs": 0.6666,
+      "reductionPercent": 44.7
+    },
+    "mapping200Ms": {
+      "beforeMs": 77.5,
+      "afterMs": 1.0,
+      "reductionPercent": 98.7
+    }
+  },
+  "finalImageOnly": "final-image",
+  "sourceSHA256": {
+    "Sources/EasyMarkdown/Resources/reader.js": "ac0956abfa57918805b295717649792d7b50cf471b36e6eff0ef97171ceebc9e",
+    "Sources/EasyMarkdown/SourceEditor.swift": "25a0e4f2b889b0cea15cc29fbaf33ae4bd172b214d89d5541d2dbffe45e05b4c",
+    "Sources/EasyMarkdown/MarkdownPreview.swift": "e8bd6fd4447b3ab52e4fd75aea4fafd770c6efdf7d46080580ad03ce77eec7d6",
+    "Sources/EasyMarkdownCore/PreviewImage.swift": "8cd186845320c0bfd5eb0ef4661dccf92ca07a4cd4a1de9d0c925def4271aaa1",
+    "Sources/EasyMarkdown/DocumentSession.swift": "a7181bc4e35e8da1e1d1cce83d8d2b3479eec3c0f6d3ccbfbd21a105fb2edd93"
+  }
+}

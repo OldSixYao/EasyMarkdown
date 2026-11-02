@@ -1,0 +1,288 @@
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+import EasyMarkdownCore
+
+@main
+struct EasyMarkdownMain {
+    @MainActor static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.setActivationPolicy(.regular)
+        withExtendedLifetime(delegate) { app.run() }
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private var welcome: NSWindowController?
+    private var settings: NSWindowController?
+    private var opening: Set<URL> = []
+    private let store = FileStore()
+    private var recentMenu: NSMenu!
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if let icon = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") {
+            NSApp.applicationIconImage = NSImage(contentsOf: icon)
+        }
+        buildMenu()
+        NSDocumentController.shared.autosavingDelay = 0
+        if let path = ProcessInfo.processInfo.environment["EASYMARKDOWN_MEMORY_CHECK"] {
+            Task {
+                if ProcessInfo.processInfo.environment["EASYMARKDOWN_MEMORY_PROFILE"] == "deep" {
+                    await DeepPerformanceCheck.run(directory: URL(fileURLWithPath: path))
+                } else {
+                    await MemoryCheck.run(directory: URL(fileURLWithPath: path))
+                }
+            }
+            return
+        }
+        #if DEBUG
+        if CommandLine.arguments.contains("--smoke-test") {
+            Task { await SmokeCheck.run() }
+            return
+        }
+        #endif
+        if NSDocumentController.shared.documents.isEmpty && opening.isEmpty { showWelcome(nil) }
+        for argument in CommandLine.arguments.dropFirst() where !argument.hasPrefix("-") {
+            open(URL(fileURLWithPath: argument))
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showWelcome(nil) }
+        return true
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach(open)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard NSDocumentController.shared.documents.contains(where: { $0.isDocumentEdited }) else { return .terminateNow }
+        NSDocumentController.shared.closeAllDocuments(withDelegate: self,
+            didCloseAllSelector: #selector(documentsClosed(_:didCloseAll:contextInfo:)), contextInfo: nil)
+        return .terminateLater
+    }
+
+    @objc private func documentsClosed(_ controller: NSDocumentController, didCloseAll: Bool,
+                                      contextInfo: UnsafeMutableRawPointer?) {
+        NSApp.reply(toApplicationShouldTerminate: didCloseAll)
+    }
+
+    func open(_ input: URL) {
+        let url = input.standardizedFileURL.resolvingSymlinksInPath()
+        guard url.isFileURL else { return }
+        if let document = NSDocumentController.shared.documents.first(where: { $0.fileURL == url }) {
+            document.showWindows(); return
+        }
+        guard opening.insert(url).inserted else { return }
+        Task {
+            defer { opening.remove(url) }
+            do {
+                let snapshot = try await store.read(url)
+                let document = MarkdownDocument(snapshot: snapshot, url: url)
+                NSDocumentController.shared.addDocument(document)
+                document.makeWindowControllers()
+                document.showWindows()
+                NSDocumentController.shared.noteNewRecentDocumentURL(url)
+                welcome?.close()
+            } catch {
+                NSAlert(error: error).runModal()
+            }
+        }
+    }
+
+    @objc func openPanel(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.text, .json, .xml, .sourceCode,
+            UTType(filenameExtension: "md") ?? .plainText]
+        panel.allowsOtherFileTypes = true
+        if panel.runModal() == .OK { panel.urls.forEach(open) }
+    }
+
+    @objc func showWelcome(_ sender: Any?) {
+        if let welcome { welcome.showWindow(nil); return }
+        let size = NSSize(width: 720, height: 560)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.title = "EasyMarkdown"
+        window.titlebarAppearsTransparent = true
+        let hosting = NSHostingController(rootView: WelcomeView())
+        // Let the window own its size; SwiftUI's compressed fitting size is too narrow.
+        hosting.sizingOptions = [.minSize]
+        window.contentViewController = hosting
+        window.contentMinSize = NSSize(width: 640, height: 520)
+        window.setContentSize(size)
+        window.center()
+        welcome = NSWindowController(window: window)
+        welcome?.showWindow(nil)
+    }
+
+    @objc private func showSettings(_ sender: Any?) {
+        if let settings { settings.showWindow(nil); return }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 300),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "设置"
+        let hosting = NSHostingController(rootView: SettingsView())
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 470, height: 320))
+        window.center()
+        settings = NSWindowController(window: window)
+        settings?.showWindow(nil)
+    }
+
+    private var currentSession: DocumentSession? {
+        (NSDocumentController.shared.currentDocument as? MarkdownDocument)?.session
+    }
+
+    @objc private func find(_ sender: Any?) {
+        guard let session = currentSession else { return }
+        if session.mode == .read { session.showFind = true }
+        else { session.findInEditor?() }
+    }
+
+    @objc private func findNext(_ sender: Any?) { currentSession?.findRequest += 1 }
+    @objc private func toggleEditing(_ sender: Any?) {
+        guard let session = currentSession else { return }
+        if session.mode == .read { session.mode = .edit }
+        else { session.save(finishing: true) }
+    }
+
+    @objc private func openRecent(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? URL { open(url) }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === recentMenu else { return }
+        menu.removeAllItems()
+        for url in NSDocumentController.shared.recentDocumentURLs.prefix(12) {
+            let item = menu.addItem(withTitle: url.lastPathComponent, action: #selector(openRecent(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = url; item.toolTip = url.path
+        }
+        menu.addItem(.separator())
+        let clear = menu.addItem(withTitle: "清除菜单", action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: "")
+        clear.target = NSDocumentController.shared
+    }
+
+    private func buildMenu() {
+        let main = NSMenu()
+        func submenu(_ title: String) -> NSMenu {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title); item.submenu = menu; main.addItem(item); return menu
+        }
+        @discardableResult
+        func item(_ menu: NSMenu, _ title: String, _ action: Selector, _ key: String = "",
+                  _ target: AnyObject? = nil, shift: Bool = false) -> NSMenuItem {
+            let value = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
+            value.target = target
+            if shift { value.keyEquivalentModifierMask = [.command, .shift] }
+            return value
+        }
+        let app = submenu("EasyMarkdown")
+        item(app, "关于 EasyMarkdown", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", NSApp)
+        app.addItem(.separator())
+        item(app, "设置…", #selector(showSettings(_:)), ",", self)
+        app.addItem(.separator())
+        item(app, "隐藏 EasyMarkdown", #selector(NSApplication.hide(_:)), "h", NSApp)
+        app.addItem(.separator())
+        item(app, "退出 EasyMarkdown", #selector(NSApplication.terminate(_:)), "q", NSApp)
+
+        let file = submenu("文件")
+        item(file, "打开…", #selector(openPanel(_:)), "o", self)
+        let recent = NSMenuItem(title: "最近使用", action: nil, keyEquivalent: "")
+        recentMenu = NSMenu(title: "最近使用"); recentMenu.delegate = self; recent.submenu = recentMenu
+        file.addItem(recent)
+        file.addItem(.separator())
+        item(file, "保存", #selector(NSDocument.save(_:)), "s")
+        item(file, "另存为…", #selector(NSDocument.saveAs(_:)), "s", shift: true)
+        item(file, "关闭", #selector(NSWindow.performClose(_:)), "w")
+        file.addItem(.separator())
+        item(file, "打开起始窗口", #selector(showWelcome(_:)), "n", self)
+
+        let edit = submenu("编辑")
+        item(edit, "撤销", NSSelectorFromString("undo:"), "z")
+        item(edit, "重做", NSSelectorFromString("redo:"), "z", shift: true)
+        edit.addItem(.separator())
+        item(edit, "剪切", #selector(NSText.cut(_:)), "x")
+        item(edit, "复制", #selector(NSText.copy(_:)), "c")
+        item(edit, "粘贴", #selector(NSText.paste(_:)), "v")
+        item(edit, "全选", #selector(NSText.selectAll(_:)), "a")
+        edit.addItem(.separator())
+        item(edit, "查找…", #selector(find(_:)), "f", self)
+        item(edit, "查找下一个", #selector(findNext(_:)), "g", self)
+        item(edit, "编辑 / 完成", #selector(toggleEditing(_:)), "e", self)
+
+        let window = submenu("窗口")
+        item(window, "最小化", #selector(NSWindow.performMiniaturize(_:)), "m")
+        item(window, "缩放", #selector(NSWindow.performZoom(_:)))
+        NSApp.windowsMenu = window
+        NSApp.mainMenu = main
+    }
+}
+
+private struct WelcomeView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "doc.text").font(.system(size: 48, weight: .ultraLight)).foregroundStyle(.secondary)
+            Text("EasyMarkdown").font(.system(size: 28, weight: .semibold, design: .rounded))
+            Text("安静阅读，随手修改。").foregroundStyle(.secondary)
+            Button("打开文档…") { (NSApp.delegate as? AppDelegate)?.openPanel(nil) }
+                .buttonStyle(.borderedProminent).controlSize(.large).padding(.top, 8)
+            Text("也可以将 Markdown、TXT、JSON 或 XML 拖到这里")
+                .font(.caption).foregroundStyle(.tertiary)
+            if !NSDocumentController.shared.recentDocumentURLs.isEmpty {
+                Divider().padding(.horizontal, 70).padding(.top, 8)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(NSDocumentController.shared.recentDocumentURLs.prefix(4)), id: \.self) { url in
+                        Button { (NSApp.delegate as? AppDelegate)?.open(url) } label: {
+                            Label(url.lastPathComponent, systemImage: "doc").lineLimit(1)
+                        }.buttonStyle(.link)
+                    }
+                }.frame(maxWidth: 320, alignment: .leading)
+            }
+        }.padding(32)
+            .frame(minWidth: 640, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                for provider in providers {
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                        guard let url else { return }
+                        Task { @MainActor in (NSApp.delegate as? AppDelegate)?.open(url) }
+                    }
+                }
+                return !providers.isEmpty
+            }
+    }
+}
+
+private struct SettingsView: View {
+    @AppStorage("readerFontSize") var fontSize = 16.0
+    @AppStorage("editorFontSize") var editorSize = 14.0
+    @AppStorage("readerWidth") var width = 780.0
+    @AppStorage("remoteImages") var remoteImages = false
+    @AppStorage("appearance") var appearance = "system"
+
+    var body: some View {
+        Form {
+            Picker("外观", selection: $appearance) {
+                Text("跟随系统").tag("system"); Text("浅色").tag("light"); Text("深色").tag("dark")
+            }
+            Stepper("阅读字号：\(Int(fontSize))", value: $fontSize, in: 12...26)
+            Stepper("编辑字号：\(Int(editorSize))", value: $editorSize, in: 11...24)
+            Picker("阅读宽度", selection: $width) {
+                Text("紧凑").tag(660.0); Text("适中").tag(780.0); Text("宽松").tag(980.0)
+            }
+            Toggle("加载文档中的远程图片", isOn: $remoteImages)
+            Text("默认仅加载本地图片。开启后，会向图片所在的网站发送请求。")
+                .font(.caption).foregroundStyle(.secondary)
+        }.formStyle(.grouped).frame(width: 470, height: 320)
+    }
+}

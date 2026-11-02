@@ -1,0 +1,240 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct DocumentView: View {
+    @Bindable var session: DocumentSession
+    @AppStorage("appearance") private var appearance = "system"
+    @FocusState private var searchFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            Divider()
+            if session.kind == .markdown && session.mode != .read {
+                MarkdownToolbar(session: session)
+                Divider()
+            }
+            if session.recovery != nil { recoveryBanner }
+            if session.state.hasConflict { conflictBanner }
+            if session.showFind && session.mode == .read { findBar }
+            HStack(spacing: 0) {
+                if session.showOutline && session.kind == .markdown {
+                    outline.frame(width: 210)
+                    Divider()
+                }
+                // Keep the visible pane's identity when adding/removing its neighbor.
+                HSplitView {
+                    if session.mode != .read {
+                        SourceEditor(session: session).frame(minWidth: 240)
+                    }
+                    if session.mode != .edit {
+                        MarkdownPreview(session: session).frame(minWidth: 240)
+                    }
+                }
+            }
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+        .preferredColorScheme(appearance == "system" ? nil : appearance == "dark" ? .dark : .light)
+        .alert("无法完成操作", isPresented: Binding(get: { session.errorMessage != nil },
+            set: { if !$0 { session.errorMessage = nil } })) {
+                Button("好", role: .cancel) { session.errorMessage = nil }
+            } message: { Text(session.errorMessage ?? "") }
+        .sheet(isPresented: $session.showExternal) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("磁盘上的最新版本").font(.headline)
+                    Spacer()
+                    Button("关闭") { session.showExternal = false }.keyboardShortcut(.cancelAction)
+                }.padding()
+                Divider()
+                MarkdownPreview(session: session, overrideText: session.state.external?.text ?? session.state.baseline.text)
+            }.frame(width: 760, height: 600)
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil, perform: acceptDrop)
+        .onChange(of: session.showFind) { _, visible in searchFocused = visible }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { event in
+            if let window = event.object as? NSWindow,
+               session.document?.windowControllers.contains(where: { $0.window === window }) == true {
+                session.scheduleReload()
+            }
+        }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 12) {
+            if session.kind == .markdown {
+                Button { session.showOutline.toggle() } label: {
+                    Image(systemName: "sidebar.left").frame(width: 26, height: 26)
+                }
+                    .toolbarHoverFeedback("大纲：显示或隐藏文档标题")
+            }
+            if session.mode != .read || session.state.isDirty || session.isSaving {
+                saveStateBadge
+            } else if !session.status.isEmpty {
+                Text(session.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if session.mode != .read {
+                Picker("视图", selection: $session.mode) {
+                    Text("源码").tag(ViewMode.edit)
+                    Text("分栏").tag(ViewMode.split)
+                }.pickerStyle(.segmented).frame(width: 128)
+                    .help("视图：切换源码编辑或分栏预览")
+                if session.mode == .split {
+                    Button {
+                        session.synchronizeSplitScroll.toggle()
+                        if session.synchronizeSplitScroll { session.alignPreviewToEditor?() }
+                    } label: {
+                        Image(systemName: "link")
+                            .frame(width: 26, height: 26)
+                            .foregroundStyle(session.synchronizeSplitScroll ? Color.accentColor : Color.secondary)
+                    }
+                    .toolbarHoverFeedback(session.synchronizeSplitScroll ? "同步滚动已开启，点击关闭" : "同步滚动已关闭，点击开启")
+                    .accessibilityValue(session.synchronizeSplitScroll ? "开启" : "关闭")
+                }
+                if session.kind == .json || session.kind == .xml {
+                    Button("格式化") { session.format() }.disabled(session.isSaving)
+                        .toolbarHoverFeedback("格式化文档")
+                }
+            }
+            Button {
+                if session.mode == .read { session.showFind.toggle() }
+                else { session.findInEditor?() }
+            } label: { Image(systemName: "magnifyingglass").frame(width: 26, height: 26) }
+                .toolbarHoverFeedback("查找 ⌘F")
+            if session.mode == .read {
+                Button { session.mode = .edit } label: { Label("编辑", systemImage: "square.and.pencil") }
+                    .toolbarHoverFeedback("编辑文档 ⌘E")
+            } else {
+                Button("保存") { session.save() }
+                    .buttonStyle(.bordered)
+                    .disabled(!session.state.isDirty || session.isSaving)
+                    .toolbarHoverFeedback("保存文档 ⌘S")
+                Button("完成") { session.save(finishing: true) }.disabled(session.isSaving)
+                    .buttonStyle(.borderedProminent)
+                    .toolbarHoverFeedback("完成：保存并返回阅读 ⌘E")
+            }
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 20).frame(height: 46)
+        .background(.bar)
+    }
+
+    private var saveStateBadge: some View {
+        let dirty = session.state.isDirty
+        let failed = dirty && session.saveFailure != nil
+        let tint: Color = failed ? .red : dirty ? Color(nsColor: .systemOrange) : .secondary
+        return HStack(spacing: 5) {
+            if session.isSaving {
+                ProgressView().controlSize(.mini)
+            } else {
+                Image(systemName: failed ? "exclamationmark.circle.fill" : dirty ? "circle.fill" : "checkmark.circle")
+                    .font(.system(size: dirty && !failed ? 7 : 12))
+            }
+            Text(session.saveStateLabel).font(.system(size: 12, weight: dirty ? .semibold : .regular))
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(tint.opacity(dirty ? 0.14 : 0.06), in: Capsule())
+        .fixedSize()
+        .help(dirty ? (session.saveFailure ?? "修改尚未写入文件，按 ⌘S 保存。恢复草稿不代表原文件已保存。") : "当前内容已保存到文件")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(session.saveStateLabel)
+        .accessibilityIdentifier("documentSaveState")
+    }
+
+    private var outline: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("文档大纲").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.top, 20)
+            if session.headings.isEmpty {
+                Text("暂无标题").font(.callout).foregroundStyle(.tertiary).padding(.horizontal, 16)
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(session.headings) { heading in
+                            let selected = session.activeHeadingID == heading.id
+                            Button {
+                                if session.mode == .edit { session.mode = .split }
+                                session.activeHeadingID = heading.id
+                                session.scrollTarget = heading.id
+                                session.scrollRequest += 1
+                            } label: {
+                                Text(heading.title).font(.system(size: 12, weight: selected ? .semibold : .regular))
+                                    .foregroundStyle(selected ? Color.accentColor : Color.primary).lineLimit(2)
+                                    .padding(.vertical, 8).padding(.leading, CGFloat(min(heading.level - 1, 3) * 10 + 16))
+                                    .padding(.trailing, 12).frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(selected ? Color.accentColor.opacity(0.13) : Color.clear,
+                                                in: RoundedRectangle(cornerRadius: 5))
+                                    .overlay(alignment: .leading) {
+                                        if selected {
+                                            Capsule().fill(Color.accentColor).frame(width: 3, height: 16).padding(.leading, 5)
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                            .accessibilityValue(selected ? "当前阅读位置" : "")
+                            .id(heading.id)
+                        }
+                    }.padding(.horizontal, 8)
+                }
+                .onAppear {
+                    if let id = session.activeHeadingID { proxy.scrollTo(id, anchor: .center) }
+                }
+                .onChange(of: session.activeHeadingID) { _, id in
+                    if let id { proxy.scrollTo(id, anchor: .center) }
+                }
+            }
+        }.background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var findBar: some View {
+        HStack {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("在文档中查找", text: $session.search)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .onSubmit { session.findRequest += 1 }
+            Button("下一个") { session.findRequest += 1 }
+            Button { session.showFind = false; session.search = "" } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless).accessibilityLabel("关闭查找")
+        }.padding(.horizontal, 20).padding(.vertical, 9).background(.bar)
+    }
+
+    private var conflictBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+            Text(session.state.isMissing ? "原文件已移动或删除，当前内容已保留。" : "文件已在其他位置修改，本地编辑已保留。")
+                .font(.callout)
+            Spacer(minLength: 0)
+            if session.state.external != nil {
+                Button("查看外部版本") { session.showExternal = true }
+                Button("加载外部版本") { session.acceptExternal() }
+            }
+            Button("另存为…") { session.saveAs() }
+        }.padding(12).background(.orange.opacity(0.09))
+    }
+
+    private var recoveryBanner: some View {
+        HStack {
+            Image(systemName: "clock.arrow.circlepath")
+            Text("发现上次未保存的恢复草稿。").font(.callout)
+            Spacer()
+            Button("恢复") { session.restoreDraft() }
+            Button("忽略") { session.discardRecovery() }
+        }.padding(12).background(.blue.opacity(0.08))
+    }
+
+    private func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in (NSApp.delegate as? AppDelegate)?.open(url) }
+            }
+        }
+        return !providers.isEmpty
+    }
+}
