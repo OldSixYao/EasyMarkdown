@@ -39,6 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--screenshots"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await ScreenshotCapture.run(output: output) }
+            return
+        }
         if CommandLine.arguments.contains("--smoke-test") {
             Task { await SmokeCheck.run() }
             return
