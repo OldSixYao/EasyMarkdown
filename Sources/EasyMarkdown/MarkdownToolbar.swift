@@ -38,7 +38,7 @@ struct MarkdownToolbar: View {
                     menuItem(.horizontalRule, icon: "minus")
                 } label: { Image(systemName: "ellipsis").frame(width: 26, height: 26) }
                     .menuStyle(.borderlessButton).fixedSize()
-                    .toolbarHoverFeedback("更多 Markdown 语法")
+                    .toolbarHoverFeedback(L10n.text("更多 Markdown 语法"))
             }
         }
         .buttonStyle(.borderless)
@@ -48,21 +48,21 @@ struct MarkdownToolbar: View {
         .background(.bar)
         .disabled(session.isSaving)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Markdown 语法工具栏")
+        .accessibilityLabel(L10n.text("Markdown 语法工具栏"))
         .accessibilityIdentifier("markdownToolbar")
     }
 
     private var headings: some View {
         Menu {
             ForEach(1...6, id: \.self) { level in
-                Button("H\(level)  ·  \(level) 级标题") { session.applyMarkdown?(.heading(level)) }
+                Button(L10n.format("H%d  ·  %d 级标题", level, level)) { session.applyMarkdown?(.heading(level)) }
             }
             Divider()
-            Button("正文（移除标题）") { session.applyMarkdown?(.paragraph) }
+            Button(L10n.text("正文（移除标题）")) { session.applyMarkdown?(.paragraph) }
         } label: {
-            Text("标题").fontWeight(.medium).frame(height: 26)
+            Text(L10n.text("标题")).fontWeight(.medium).frame(height: 26)
         }.menuStyle(.borderlessButton).fixedSize()
-            .toolbarHoverFeedback("标题级别 H1–H6")
+            .toolbarHoverFeedback(L10n.text("标题级别 H1–H6"))
     }
 
     private var inlineStyles: some View {

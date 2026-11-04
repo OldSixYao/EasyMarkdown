@@ -13,19 +13,19 @@ public enum DocumentFormatter {
                     options: [.prettyPrinted, .fragmentsAllowed, .withoutEscapingSlashes])
                 return String(decoding: data, as: UTF8.self) + "\n"
             } catch {
-                throw DocumentError.invalidFormat("JSON 格式无效：\(error.localizedDescription)")
+                throw DocumentError.invalidFormat(L10n.format("JSON 格式无效：%@", error.localizedDescription))
             }
         case .xml:
             // A DTD can change meaning and expand entities; don't rewrite such documents.
             guard !text.localizedCaseInsensitiveContains("<!DOCTYPE"),
                   !text.localizedCaseInsensitiveContains("<!ENTITY") else {
-                throw DocumentError.invalidFormat("包含 DTD 或实体声明的 XML 暂不支持格式化，原文已保留。")
+                throw DocumentError.invalidFormat(L10n.text("包含 DTD 或实体声明的 XML 暂不支持格式化，原文已保留。"))
             }
             do {
                 let document = try XMLDocument(xmlString: text, options: [.nodePreserveAll, .nodeLoadExternalEntitiesNever])
                 return document.xmlString(options: [.nodePrettyPrint]) + "\n"
             } catch {
-                throw DocumentError.invalidFormat("XML 格式无效：\(error.localizedDescription)")
+                throw DocumentError.invalidFormat(L10n.format("XML 格式无效：%@", error.localizedDescription))
             }
         default: return text
         }

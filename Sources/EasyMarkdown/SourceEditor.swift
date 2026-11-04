@@ -33,7 +33,7 @@ struct SourceEditor: NSViewRepresentable {
         text.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         text.string = session.state.text
         text.delegate = context.coordinator
-        text.setAccessibilityLabel("文档源码编辑器")
+        text.setAccessibilityLabel(L10n.text("文档源码编辑器"))
         scroll.documentView = text
         context.coordinator.textView = text
         context.coordinator.observeScrolling(scroll)
@@ -44,19 +44,16 @@ struct SourceEditor: NSViewRepresentable {
             guard let text else { return }
             text.breakUndoCoalescing()
             text.insertText(value, replacementRange: NSRange(location: 0, length: (text.string as NSString).length))
-            text.undoManager?.setActionName("格式化")
+            text.undoManager?.setActionName(L10n.text("格式化"))
         }
-        session.findInEditor = { [weak text] in
-            guard let text else { return }
-            text.window?.makeFirstResponder(text)
-            let item = NSMenuItem()
-            item.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
-            text.performFindPanelAction(item)
+        session.editorFindAction = { [weak coordinator = context.coordinator] request in
+            coordinator?.performFind(request) ?? false
         }
         DispatchQueue.main.async { [weak text, weak coordinator = context.coordinator] in
             guard let text else { return }
             text.window?.makeFirstResponder(text)
             coordinator?.highlight()
+            coordinator?.session.flushEditorFindRequest()
         }
         context.coordinator.highlight()
         return scroll
@@ -81,6 +78,11 @@ struct SourceEditor: NSViewRepresentable {
             context.coordinator.updatingText = false
         }
         text.isEditable = !session.isSaving
+        if session.pendingEditorFind != nil {
+            DispatchQueue.main.async { [weak coordinator = context.coordinator] in
+                coordinator?.session.flushEditorFindRequest()
+            }
+        }
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
@@ -110,6 +112,20 @@ struct SourceEditor: NSViewRepresentable {
         }
 
         init(session: DocumentSession) { self.session = session }
+
+        func performFind(_ request: EditorFindRequest) -> Bool {
+            guard let textView, let window = textView.window, textView.delegate === self else { return false }
+            if let query = request.query {
+                let pasteboard = NSPasteboard(name: .find)
+                pasteboard.clearContents()
+                pasteboard.setString(query, forType: .string)
+            }
+            window.makeFirstResponder(textView)
+            let item = NSMenuItem()
+            item.tag = request.action.rawValue
+            textView.performTextFinderAction(item)
+            return true
+        }
 
         func observeScrolling(_ scroll: NSScrollView) {
             scroll.contentView.postsBoundsChangedNotifications = true

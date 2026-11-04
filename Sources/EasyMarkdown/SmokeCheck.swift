@@ -237,6 +237,10 @@ import EasyMarkdownCore
             guard safe == true else { throw Failure(message: "Sanitization, remote-image default or syntax highlighting failed") }
             results.append("Untrusted HTML sanitized; remote images blocked by default; code highlighted")
 
+            try await codeCopyProbe(reader: reader, document: doc, file: copy, output: output)
+            results.append("Code copy writes exact inline, fenced, indented and empty text to the native clipboard; linked code does not navigate")
+            results.append("Copy controls support focus, feedback, dark/light and narrow layouts, fixed block buttons, incremental reuse and split preview")
+
             let image = NSImage(size: NSSize(width: 10, height: 10))
             image.lockFocus(); NSColor.systemBlue.setFill(); NSRect(x: 0, y: 0, width: 10, height: 10).fill(); image.unlockFocus()
             let png = NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!
@@ -293,6 +297,11 @@ import EasyMarkdownCore
             try await eventually { closedSession.value == nil }
             results.append("Closing releases the session; visible panes are reused; typing renders are coalesced; large preview transfer is capped")
             results.append("Incremental rendering retains unchanged nodes, updates reference links and filters raw images; syntax colors remain temporary")
+            try await searchProbe(directory: output)
+            results.append("Reader search count and bidirectional navigation share visible text matches, ignore controls, survive reloads and preserve native input focus")
+            results.append("Native replace opens with the reader query, supports single/all/empty replacements and undo; search shortcuts route correctly in read/edit/split modes")
+            try await localizationProbe(directory: output)
+            results.append("Packaged app selects Simplified Chinese; native replace, file panels and unsaved close/quit prompts are Chinese with cancel/save/discard preserved")
             let report = ["status": "passed", "checks": results] as [String: Any]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("report.json"))
@@ -320,6 +329,484 @@ import EasyMarkdownCore
 
     private static func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
+    }
+
+    private static func readerScript(_ reader: WKWebView, _ script: String, arguments: [String: Any] = [:]) async throws -> Any {
+        try await withCheckedThrowingContinuation { continuation in
+            reader.callAsyncJavaScript(script, arguments: arguments, in: nil, in: .page) {
+                continuation.resume(with: $0)
+            }
+        }
+    }
+
+    private static func searchProbe(directory: URL) async throws {
+        let appearance = UserDefaults.standard.object(forKey: "appearance")
+        let appAppearance = NSApp.appearance
+        defer {
+            if let appearance { UserDefaults.standard.set(appearance, forKey: "appearance") }
+            else { UserDefaults.standard.removeObject(forKey: "appearance") }
+            NSApp.appearance = appAppearance
+        }
+        let findPasteboard = NSPasteboard(name: .find)
+        let savedFind = (findPasteboard.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        }
+        defer {
+            findPasteboard.clearContents()
+            if !savedFind.isEmpty { findPasteboard.writeObjects(savedFind) }
+        }
+        let url = directory.appendingPathComponent("search.md")
+        let source = "# Search checks\n\nAlpha alpha ALPHA\n\n中**文** 与 [链接](https://example.com/alpha)\n\n`alpha <&> .* [x]`\n\n```text\nalpha\n  中文\n```\n\nfoo\n\nbar\n\n<span hidden>alpha 隐藏</span>\n\naaaa\n"
+        try Data(source.utf8).write(to: url)
+        let doc = MarkdownDocument(snapshot: try FileSnapshot(data: Data(source.utf8)), url: url)
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers(); doc.showWindows()
+        defer { doc.updateChangeCount(.changeCleared); doc.close() }
+        guard let window = doc.windowControllers.first?.window, let root = window.contentView else {
+            throw Failure(message: "Search test has no window")
+        }
+        var reader: WKWebView?
+        try await eventually(description: "search fixture renders") {
+            reader = descendants(root).compactMap { $0 as? WKWebView }.first
+            guard let reader else { return false }
+            return (try? await reader.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "Search checks"
+        }
+        guard let reader else { throw Failure(message: "Search fixture has no reader") }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        doc.session.showSearch()
+        doc.session.search = "alpha"
+        try await eventually(description: "five visible alpha matches") { doc.session.searchResultCount == 5 }
+        guard (try await reader.evaluateJavaScript("readerSearch.index===0 && readerSearch.range.toString()==='Alpha'")) as? Bool == true else {
+            throw Failure(message: "Search did not select the first literal match")
+        }
+        let focus = window.firstResponder
+        let menu = NSApp.mainMenu?.items.first { $0.title == "编辑" }?.submenu
+        guard let next = menu?.items.first(where: { $0.title == "查找下一个" }),
+              let previous = menu?.items.first(where: { $0.title == "查找上一个" }),
+              let replace = menu?.items.first(where: { $0.title == "查找并替换…" }),
+              previous.keyEquivalentModifierMask == [.command, .shift],
+              replace.keyEquivalentModifierMask == [.command, .option] else {
+            throw Failure(message: "Find menu commands or key equivalents missing")
+        }
+        func invoke(_ item: NSMenuItem) throws {
+            guard let action = item.action, NSApp.sendAction(action, to: item.target, from: item) else {
+                throw Failure(message: "Find menu action was not delivered: \(item.title)")
+            }
+        }
+        try invoke(previous)
+        try await eventually(description: "previous wraps to last match") {
+            (try? await reader.evaluateJavaScript("readerSearch.index")) as? Int == 4
+        }
+        try invoke(next)
+        try await eventually(description: "next wraps to first match") {
+            (try? await reader.evaluateJavaScript("readerSearch.index")) as? Int == 0
+        }
+        for index in 1...4 {
+            doc.session.navigateSearch()
+            try await eventually(description: "counted match \(index) is navigable") {
+                (try? await reader.evaluateJavaScript("readerSearch.index")) as? Int == index
+            }
+        }
+        doc.session.navigateSearch()
+        doc.session.navigateSearch()
+        doc.session.navigateSearch(backwards: true)
+        try await eventually(description: "coalesced opposite navigation retains net movement") {
+            (try? await reader.evaluateJavaScript("readerSearch.index")) as? Int == 0
+        }
+        guard window.firstResponder === focus else { throw Failure(message: "Reader search navigation stole search field focus") }
+        for (query, count) in [("中文", 2), ("foo bar", 0), ("foo\nbar", 0), ("aa", 2), (".* [x]", 1), ("复制代码", 0), ("隐藏", 0), ("不存在", 0)] {
+            doc.session.search = query
+            try await eventually(description: "visible match count for \(query)") { doc.session.searchResultCount == count }
+        }
+        doc.session.search = "中文"
+        try await eventually { doc.session.searchResultCount == 2 }
+        guard (try await reader.evaluateJavaScript("readerSearch.range.toString()==='中文' && readerSearch.range.startContainer!==readerSearch.range.endContainer")) as? Bool == true else {
+            throw Failure(message: "Inline emphasis broke a visible text match")
+        }
+        doc.session.search = "alpha"
+        doc.session.search = "aa"
+        doc.session.search = "链接"
+        try await eventually(description: "latest rapid query wins") { doc.session.searchResultCount == 1 }
+        doc.session.closeSearch()
+        try await eventually(description: "closing clears ranges and count") {
+            guard doc.session.searchResultCount == nil else { return false }
+            return (try? await reader.evaluateJavaScript("readerSearch.count===0 && !readerSearch.range")) as? Bool == true
+        }
+        doc.session.showSearch()
+        doc.session.search = "alpha"
+        try await eventually { doc.session.searchResultCount == 5 }
+        let changed = source.replacingOccurrences(of: "Alpha alpha ALPHA", with: "alpha")
+        try Data(changed.utf8).write(to: url, options: .atomic)
+        try await eventually(description: "external refresh recounts search") { doc.session.searchResultCount == 3 }
+        guard (try await reader.evaluateJavaScript("readerSearch.index")) as? Int == 0 else { throw Failure(message: "Refresh did not reset the current match") }
+
+        // Direct DOM cases also exercise the selection fallback and clipped preview count.
+        let edgeCases = try await readerScript(reader, #"""
+            const prefs={fontSize:16,width:780,appearance:'system',remoteImages:false};
+            window.updateDocument('line  one\nnext **word**\n\n<code>top</code>','markdown','file:///',prefs,{});
+            const space=window.updateReaderSearch('line one next word',false,0).count===1;
+            window.updateDocument('prefix '.repeat(71429),'markdown','file:///',prefs,{});
+            const clipped=window.updateReaderSearch('prefix',false,0);
+            const truncated=clipped.truncated && clipped.count===71428;
+            window.updateDocument('fallback fallback','text','file:///',prefs,{});
+            const descriptor=Object.getOwnPropertyDescriptor(globalThis,'Highlight');
+            Object.defineProperty(globalThis,'Highlight',{value:undefined,configurable:true});
+            window.updateReaderSearch('fallback',false,0);
+            const fallback=readerSearch.selection && getSelection().toString()==='fallback';
+            window.updateReaderSearch('',false,0);
+            const cleared=!getSelection().rangeCount;
+            if(descriptor) Object.defineProperty(globalThis,'Highlight',descriptor);
+            else delete globalThis.Highlight;
+            return {space,truncated,fallback,cleared};
+            """#)
+        guard let edge = edgeCases as? [String: Bool], edge.values.allSatisfy({ $0 }) else {
+            throw Failure(message: "Search whitespace/truncation/fallback checks failed: \(edgeCases)")
+        }
+        // Restore through the real document renderer before entering native replace.
+        try Data(source.utf8).write(to: url, options: .atomic)
+        try await eventually(description: "search fixture restores") {
+            guard doc.session.searchResultCount == 5 else { return false }
+            return (try? await reader.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "Search checks"
+        }
+        doc.session.search = "alpha"
+        window.setContentSize(NSSize(width: 620, height: 520))
+        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            UserDefaults.standard.set(name, forKey: "appearance")
+            NSApp.appearance = NSAppearance(named: appearance)
+            try await ScreenshotCapture.capture(window, to: directory.appendingPathComponent("search-\(name).png"))
+        }
+        let clipboardChange = NSPasteboard.general.changeCount
+        try invoke(replace)
+        var editor: NSTextView?
+        try await eventually(description: "native replace bar opens after editor mounts") {
+            editor = descendants(root).compactMap { $0 as? NSTextView }.first { $0.delegate is SourceEditor.Coordinator }
+            return editor?.enclosingScrollView?.isFindBarVisible == true && doc.session.pendingEditorFind == nil
+        }
+        guard let editor, let scroll = editor.enclosingScrollView, let bar = scroll.findBarView else {
+            throw Failure(message: "Native replace bar missing")
+        }
+        let fields = descendants(bar).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        let findButtons = descendants(bar).flatMap { view -> [String] in
+            if let button = view as? NSButton { return [button.title] }
+            if let segments = view as? NSSegmentedControl {
+                return (0..<segments.segmentCount).compactMap { segments.label(forSegment: $0) }
+            }
+            return []
+        }
+        guard findButtons.contains("替换"), findButtons.contains("全部"), findButtons.contains("完成") else {
+            throw Failure(message: "Native find/replace controls are not Chinese: \(findButtons)")
+        }
+        guard fields.count >= 2, let findField = fields.first(where: { $0.stringValue == "alpha" }),
+              let replacementField = fields.first(where: { $0 !== findField }) else {
+            throw Failure(message: "Native replacement did not receive reader query: \(fields.map { "\(type(of: $0))=\($0.stringValue)" })")
+        }
+        guard doc.session.mode == .edit, editor.string == source, !doc.session.state.isDirty,
+              NSPasteboard.general.changeCount == clipboardChange else {
+            throw Failure(message: "Entering replace changed document content or the general clipboard")
+        }
+        try await ScreenshotCapture.capture(window, to: directory.appendingPathComponent("native-replace.png"))
+        func setField(_ field: NSTextField, value: String) throws {
+            window.makeFirstResponder(field)
+            guard let fieldEditor = field.currentEditor() as? NSTextView else { throw Failure(message: "Native find field has no editor") }
+            fieldEditor.selectAll(nil)
+            fieldEditor.insertText(value, replacementRange: NSRange(location: 0, length: (fieldEditor.string as NSString).length))
+            window.makeFirstResponder(editor)
+        }
+        try setField(replacementField, value: "替换<&>")
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        try invoke(next)
+        try await eventually(description: "native next selects source match") { editor.selectedRange().length == 5 }
+        let first = editor.selectedRange()
+        try invoke(next)
+        try await eventually { editor.selectedRange().location > first.location }
+        try invoke(previous)
+        try await eventually { editor.selectedRange() == first }
+        try await Task.sleep(for: .milliseconds(50))
+        doc.session.requestEditorFind(.replace)
+        try await eventually(description: "native single replace updates buffer") { doc.session.state.text.contains("替换<&>") }
+        guard doc.session.state.isDirty, try String(contentsOf: url, encoding: .utf8) == source else {
+            throw Failure(message: "Single replace was saved automatically or failed to mark dirty")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        editor.undoManager?.undo()
+        try await eventually(description: "single replace undo") { doc.session.state.text == source }
+        try await Task.sleep(for: .milliseconds(50))
+        editor.undoManager?.redo()
+        try await eventually { doc.session.state.text.contains("替换<&>") }
+        try await Task.sleep(for: .milliseconds(50))
+        editor.undoManager?.undo()
+        try await eventually { doc.session.state.text == source }
+        try await Task.sleep(for: .milliseconds(50))
+        doc.session.requestEditorFind(.replaceAll)
+        try await eventually(description: "native replace all") { !doc.session.state.text.lowercased().contains("alpha") }
+        guard doc.session.state.text.components(separatedBy: "替换<&>").count - 1 == 7 else {
+            throw Failure(message: "Native replace all did not include Markdown source/hidden matches")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        editor.undoManager?.undo()
+        try await eventually(description: "replace all undo") { doc.session.state.text == source }
+        try setField(findField, value: "中文")
+        try setField(replacementField, value: "")
+        try await Task.sleep(for: .milliseconds(50))
+        doc.session.requestEditorFind(.replaceAll)
+        try await eventually(description: "empty replacement removes literal source matches") { !doc.session.state.text.contains("中文") }
+        guard doc.session.state.text.contains("中**文**") else { throw Failure(message: "Source replacement unexpectedly matched across Markdown marks") }
+        try await Task.sleep(for: .milliseconds(50))
+        editor.undoManager?.undo()
+        try await eventually { doc.session.state.text == source }
+        try setField(findField, value: "no such result")
+        doc.session.requestEditorFind(.replaceAll)
+        guard doc.session.state.text == source else { throw Failure(message: "No-match replacement modified document") }
+        try setField(findField, value: "alpha")
+        doc.session.mode = .split
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        try invoke(next)
+        try await eventually(description: "split next targets native editor") { editor.selectedRange().length == 5 }
+        let splitFirst = editor.selectedRange()
+        try invoke(next)
+        try await eventually { editor.selectedRange().location > splitFirst.location }
+        try invoke(previous)
+        try await eventually { editor.selectedRange() == splitFirst }
+        try setField(replacementField, value: "分栏替换")
+        try await Task.sleep(for: .milliseconds(50))
+        doc.session.requestEditorFind(.replace)
+        try await eventually(description: "split replace updates preview") {
+            guard let preview = descendants(root).compactMap({ $0 as? WKWebView }).first else { return false }
+            return (try? await preview.evaluateJavaScript("content.textContent.includes('分栏替换')")) as? Bool == true
+        }
+        try await doc.session.performSave(to: url, operation: .saveOperation)
+        guard !doc.session.state.isDirty, try String(contentsOf: url, encoding: .utf8) == doc.session.state.text else {
+            throw Failure(message: "Saving replacement failed")
+        }
+        doc.session.mode = .read
+        try await eventually { !descendants(root).contains { ($0 as? NSTextView)?.delegate is SourceEditor.Coordinator } }
+        doc.session.showReplace()
+        try await eventually(description: "reopening replace consumes pending request") {
+            guard let editor = descendants(root).compactMap({ $0 as? NSTextView }).first(where: { $0.delegate is SourceEditor.Coordinator }) else { return false }
+            return editor.enclosingScrollView?.isFindBarVisible == true && doc.session.pendingEditorFind == nil
+        }
+    }
+
+    private final class CloseDecision: NSObject {
+        var result: Bool?
+        @objc func document(_ document: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?) {
+            result = shouldClose
+        }
+        @objc func controller(_ controller: NSDocumentController, didCloseAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
+            result = didCloseAll
+        }
+    }
+
+    private static func localizationProbe(directory: URL) async throws {
+        guard Bundle.main.developmentLocalization == "en",
+              Set(Bundle.main.localizations).isSuperset(of: ["zh-Hans", "zh-Hant", "en"]),
+              Bundle.main.preferredLocalizations.first == "zh-Hans",
+              Bundle.main.url(forResource: "InfoPlist", withExtension: "strings", subdirectory: "zh-Hans.lproj") != nil else {
+            throw Failure(message: "Main app bundle has no active Simplified Chinese localization: \(Bundle.main.preferredLocalizations)")
+        }
+        let open = NSOpenPanel()
+        let save = NSSavePanel()
+        guard open.prompt == "打开", ["存储", "保存"].contains(save.prompt) else {
+            throw Failure(message: "Native file panel prompts are not Chinese: \(open.prompt ?? "nil"), \(save.prompt ?? "nil")")
+        }
+        let file = directory.appendingPathComponent("中文保存提示.md")
+        let original = "# 未修改的磁盘内容\n"
+        try Data(original.utf8).write(to: file)
+        let doc = MarkdownDocument(snapshot: try FileSnapshot(data: Data(original.utf8)), url: file)
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers(); doc.showWindows()
+        defer { doc.updateChangeCount(.changeCleared); doc.close() }
+        guard let window = doc.windowControllers.first?.window else { throw Failure(message: "Localization window missing") }
+        window.makeKeyAndOrderFront(nil)
+        doc.session.edit("# 需要保存的修改\n")
+        let decision = CloseDecision()
+        for action in ["取消", "退出取消", "存储", "不存储"] {
+            decision.result = nil
+            if action == "退出取消" {
+                // The same close-all path used by applicationShouldTerminate, without terminating the test process.
+                NSDocumentController.shared.closeAllDocuments(withDelegate: decision,
+                    didCloseAllSelector: #selector(CloseDecision.controller(_:didCloseAll:contextInfo:)), contextInfo: nil)
+            } else {
+                doc.canClose(withDelegate: decision,
+                    shouldClose: #selector(CloseDecision.document(_:shouldClose:contextInfo:)), contextInfo: nil)
+            }
+            try await eventually(description: "Chinese unsaved changes sheet") { window.attachedSheet != nil }
+            guard let sheet = window.attachedSheet, let view = sheet.contentView else { throw Failure(message: "Save sheet has no content") }
+            let buttons = descendants(view).compactMap { $0 as? NSButton }
+            let titles = buttons.map(\.title)
+            guard titles.contains("取消"), titles.contains(where: { ["存储", "保存"].contains($0) }),
+                  titles.contains(where: { ["不存储", "不保存"].contains($0) }) else {
+                throw Failure(message: "Unsaved changes buttons are not Chinese: \(titles)")
+            }
+            let message = descendants(view).compactMap { $0 as? NSTextField }.map(\.stringValue).joined(separator: " ")
+            guard message.contains("修改") || message.contains("更改") else {
+                throw Failure(message: "Unsaved changes message is not Chinese: \(message)")
+            }
+            if action == "取消" {
+                try await ScreenshotCapture.capture(window, to: directory.appendingPathComponent("save-confirmation-zh.png"))
+            }
+            let choices = action == "退出取消" ? ["取消"] : action == "存储" ? ["存储", "保存"] : action == "不存储" ? ["不存储", "不保存"] : ["取消"]
+            guard let button = buttons.first(where: { choices.contains($0.title) }) else { throw Failure(message: "Save action not found") }
+            button.performClick(nil)
+            try await eventually(description: "localized save decision completes") { decision.result != nil && window.attachedSheet == nil }
+            if action.contains("取消") {
+                guard decision.result == false, doc.isDocumentEdited,
+                      try String(contentsOf: file, encoding: .utf8) == original else {
+                    throw Failure(message: "Cancel did not preserve the unsaved document")
+                }
+            } else if action == "存储" {
+                guard decision.result == true, !doc.isDocumentEdited,
+                      try String(contentsOf: file, encoding: .utf8) == doc.session.state.text else {
+                    throw Failure(message: "Localized save did not save the edited text")
+                }
+                doc.session.edit("# 放弃本次修改\n")
+            } else {
+                guard decision.result == true,
+                      try String(contentsOf: file, encoding: .utf8) == "# 需要保存的修改\n" else {
+                    throw Failure(message: "Localized discard overwrote the saved file")
+                }
+            }
+        }
+    }
+
+    private static func codeCopyProbe(reader: WKWebView, document: MarkdownDocument, file: URL, output: URL) async throws {
+        // Restore every available clipboard representation after the native copy checks.
+        let clipboard = NSPasteboard.general
+        let savedItems = (clipboard.pasteboardItems ?? []).map { item in
+            let saved = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { saved.setData(data, forType: type) }
+            }
+            return saved
+        }
+        defer {
+            clipboard.clearContents()
+            if !savedItems.isEmpty { clipboard.writeObjects(savedItems) }
+        }
+        let inline = #"中文 <&> "引号" \路径 $(test) ${value}"#
+        let fenced = "const 文本 = \"<&> 中文\";\n\tconsole.log(文本);\n// " + String(repeating: "long ", count: 80) + "\n"
+        let longInline = String(repeating: "长代码", count: 100)
+        let source = "# Copy `标题`\n\n正文 `" + inline + "`。\n\n[`链接代码`](https://example.com/copy-must-not-open)\n\n`" + longInline + "`\n\n可更新段落\n\n```javascript\n" + fenced + "```\n\n    缩进代码 <&>\n        保留空格\n\n```\n```\n"
+        try Data(source.utf8).write(to: file, options: .atomic)
+        try await eventually(description: "copy buttons render") {
+            (try? await reader.evaluateJavaScript("document.querySelectorAll('.code-copy-button').length")) as? Int == 7
+        }
+        guard (try await reader.evaluateJavaScript("[...document.querySelectorAll('.code-copy-button')].every(b=>getComputedStyle(b).opacity==='0' && b.tabIndex===0 && b.getAttribute('aria-label')==='复制代码')")) as? Bool == true else {
+            throw Failure(message: "Copy controls are not hidden, labelled and keyboard focusable")
+        }
+        guard document.session.headings.first?.title == "Copy 标题",
+              !document.session.state.isDirty else { throw Failure(message: "Copy controls changed headings or document state") }
+        _ = try await reader.evaluateJavaScript("window.__copyHeading=document.querySelector('h1');window.__copyBlock=document.querySelector('pre');window.__copyButton=document.querySelector('pre>.code-copy-button');true")
+        let cases = [
+            ("h1 .code-copy-button", "标题"),
+            ("p .code-copy-button", inline),
+            ("a .code-copy-button", "链接代码"),
+            ("pre:nth-of-type(1)>.code-copy-button", fenced),
+            ("pre:nth-of-type(2)>.code-copy-button", "缩进代码 <&>\n    保留空格\n"),
+            // marked renders even an empty fenced block with a final newline.
+            ("pre:nth-of-type(3)>.code-copy-button", "\n")
+        ]
+        for (selector, expected) in cases {
+            clipboard.clearContents()
+            _ = try await readerScript(reader, "document.querySelector(selector).click(); return true", arguments: ["selector": selector])
+            try await eventually(description: "native copy of \(selector)") { clipboard.string(forType: .string) == expected }
+            try await eventually(description: "copy success feedback") {
+                (try? await readerScript(reader, "return document.querySelector(selector).dataset.copyState === 'success'", arguments: ["selector": selector])) as? Bool == true
+            }
+        }
+        guard (try await reader.evaluateJavaScript("document.querySelector('h1').textContent==='Copy 标题' && readingBlocks[0].key==='Copy 标题' && pendingCopies.size===0")) as? Bool == true else {
+            throw Failure(message: "Copy feedback contaminated heading/reading text or left pending requests")
+        }
+        // Force a failed response without changing the clipboard, then retry normally.
+        _ = try await reader.evaluateJavaScript("const failed=document.querySelector('p .code-copy-button');const state=copyTargets.get(failed);state.request=++nextCopyRequest;pendingCopies.set(state.request,new WeakRef(failed));window.completeCodeCopy(state.request,false);true")
+        guard (try await reader.evaluateJavaScript("document.querySelector('p .code-copy-button').getAttribute('aria-label')==='复制失败'")) as? Bool == true else {
+            throw Failure(message: "Copy failure was not reported")
+        }
+        _ = try await reader.evaluateJavaScript("document.querySelector('p .code-copy-button').click();true")
+        try await eventually { (try? await reader.evaluateJavaScript("document.querySelector('p .code-copy-button').dataset.copyState")) as? String == "success" }
+        try await eventually(description: "copy feedback resets") {
+            (try? await reader.evaluateJavaScript("[...document.querySelectorAll('.code-copy-button')].every(b=>!b.dataset.copyState && b.title==='复制代码')")) as? Bool == true
+        }
+        guard let window = reader.window else { throw Failure(message: "Copy keyboard test has no window") }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeFirstResponder(reader)
+        try await eventually(description: "reader receives keyboard focus") {
+            (try? await reader.evaluateJavaScript("document.hasFocus()")) as? Bool == true
+        }
+        let layout = try await readerScript(reader, #"""
+            const button=document.querySelector('pre>.code-copy-button');
+            button.focus();
+            const focusVisible=document.activeElement===button && getComputedStyle(button).opacity==='1';
+            if (!focusVisible) throw new Error(JSON.stringify({active:document.activeElement.outerHTML.slice(0,300),opacity:getComputedStyle(button).opacity,hasFocus:document.hasFocus(),tabIndex:button.tabIndex}));
+            const scroll=document.querySelector('.code-copy-scroll');
+            const before=button.getBoundingClientRect().left;
+            scroll.scrollLeft=150;
+            const fixed=scroll.scrollLeft>0 && Math.abs(button.getBoundingClientRect().left-before)<1;
+            content.style.maxWidth='290px';
+            const bounds=content.getBoundingClientRect();
+            const narrow=[...content.querySelectorAll('.code-copy-inline,pre')].every(e=>{
+              const r=e.getBoundingClientRect();return r.left>=bounds.left && r.right<=bounds.right;
+            });
+            return {focusVisible,fixed,narrow,connected:sourceBlocks.every(b=>b.element.isConnected)};
+            """#)
+        guard let checks = layout as? [String: Bool], checks.values.allSatisfy({ $0 }) else {
+            throw Failure(message: "Copy focus, horizontal scrolling or narrow layout failed: \(layout)")
+        }
+        _ = try await reader.evaluateJavaScript("document.querySelector('p .code-copy-button').focus();true")
+        clipboard.clearContents()
+        for type: NSEvent.EventType in [.keyDown, .keyUp] {
+            guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49) else {
+                throw Failure(message: "Could not create copy keyboard event")
+            }
+            NSApp.sendEvent(event)
+        }
+        try await eventually(description: "Space activates the focused copy button") { clipboard.string(forType: .string) == inline }
+        for appearance in ["light", "dark"] {
+            _ = try await readerScript(reader, "document.documentElement.dataset.appearance=appearance;document.querySelector('h1 .code-copy-button').focus();window.scrollTo(0,0);return true", arguments: ["appearance": appearance])
+            try await Task.sleep(for: .milliseconds(100))
+            let image = try await reader.takeSnapshot(configuration: nil)
+            if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+               let png = bitmap.representation(using: .png, properties: [:]) {
+                try png.write(to: output.appendingPathComponent("code-copy-\(appearance).png"))
+            }
+        }
+        _ = try await reader.evaluateJavaScript("content.style.removeProperty('max-width');document.querySelector('pre>.code-copy-button').blur();true")
+        let updated = source.replacingOccurrences(of: "可更新段落", with: "已更新段落").replacingOccurrences(of: inline, with: "更新后的代码")
+        try Data(updated.utf8).write(to: file, options: .atomic)
+        try await eventually(description: "copy fixture reloads updated code") { (try? await reader.evaluateJavaScript("content.textContent.includes('已更新段落')")) as? Bool == true }
+        guard (try await reader.evaluateJavaScript("document.querySelector('h1')===window.__copyHeading && document.querySelector('pre')===window.__copyBlock && document.querySelector('pre>.code-copy-button')===window.__copyButton && content.querySelectorAll('.code-copy-button').length===7 && sourceBlocks.every(b=>b.element.isConnected)")) as? Bool == true else {
+            throw Failure(message: "Incremental code copy duplicated controls or discarded unchanged nodes")
+        }
+        document.session.mode = .split
+        try await eventually(description: "copy split editor mounts") {
+            guard let root = window.contentView else { return false }
+            return descendants(root).contains { $0 is NSTextView } && document.session.replaceText != nil
+        }
+        document.session.replaceText?(updated.replacingOccurrences(of: "更新后的代码", with: "分栏编辑代码"))
+        try await eventually(description: "copy split preview updates") { (try? await reader.evaluateJavaScript("content.textContent.includes('分栏编辑代码')")) as? Bool == true }
+        _ = try await reader.evaluateJavaScript("document.querySelector('p .code-copy-button').click();true")
+        try await eventually(description: "copy split preview writes new text") { clipboard.string(forType: .string) == "分栏编辑代码" }
+        try await document.session.performSave(to: file, operation: .saveOperation)
+        document.session.mode = .read
+        // Non-Markdown and truncated previews must not gain whole-document controls.
+        guard (try await readerScript(reader, #"""
+            const prefs={fontSize:16,width:780,appearance:'system',remoteImages:false};
+            let clean=true;
+            for(const kind of ['text','json','xml']) {
+              window.updateDocument('plain text',kind,'file:///',prefs,{});
+              clean=clean && !content.querySelector('button');
+            }
+            window.updateDocument('x'.repeat(500001),'markdown','file:///',prefs,{});
+            return clean && !content.querySelector('button') && !!content.querySelector('.notice');
+            """#)) as? Bool == true else { throw Failure(message: "Copy controls leaked into plain/truncated previews") }
     }
 
     private final class WeakSession {

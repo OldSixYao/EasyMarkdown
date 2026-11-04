@@ -1,3 +1,4 @@
+import EasyMarkdownCore
 import AppKit
 
 @MainActor enum AboutPanel {
@@ -7,7 +8,7 @@ import AppKit
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.paragraphSpacing = 8
-        let credits = NSMutableAttributedString(string: "安静阅读，随手修改。\n\nGitHub 仓库\n", attributes: [
+        let credits = NSMutableAttributedString(string: L10n.text("安静阅读，随手修改。\n\nGitHub 仓库\n"), attributes: [
             .font: NSFont.systemFont(ofSize: 12),
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraph

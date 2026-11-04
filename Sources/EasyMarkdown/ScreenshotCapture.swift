@@ -130,7 +130,7 @@ import EasyMarkdownCore
         _ = try await web.evaluateJavaScript("document.getElementById('\(title.lowercased())')?.scrollIntoView();true")
         try await Task.sleep(for: .milliseconds(200))
     }
-    private static func capture(_ window: NSWindow, to file: URL) async throws {
+    static func capture(_ window: NSWindow, to file: URL) async throws {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(600))

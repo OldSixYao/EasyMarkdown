@@ -6,6 +6,7 @@ import EasyMarkdownCore
 @main
 struct EasyMarkdownMain {
     @MainActor static func main() {
+        AppLanguage.configureAtLaunch()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -39,6 +40,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--language-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await LanguageCheck.run(output: output) }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--screenshots"),
            CommandLine.arguments.indices.contains(index + 1) {
             let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
@@ -136,11 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let settings { settings.showWindow(nil); return }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 300),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "设置"
+        window.title = L10n.text("设置")
         let hosting = NSHostingController(rootView: SettingsView())
         hosting.sizingOptions = []
         window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 470, height: 320))
+        window.setContentSize(NSSize(width: 520, height: 450))
         window.center()
         settings = NSWindowController(window: window)
         settings?.showWindow(nil)
@@ -153,12 +160,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func find(_ sender: Any?) {
-        guard let session = currentSession else { return }
-        if session.mode == .read { session.showFind = true }
-        else { session.findInEditor?() }
+        currentSession?.showSearch()
     }
 
-    @objc private func findNext(_ sender: Any?) { currentSession?.findRequest += 1 }
+    @objc private func findNext(_ sender: Any?) { currentSession?.navigateSearch() }
+    @objc private func findPrevious(_ sender: Any?) { currentSession?.navigateSearch(backwards: true) }
+    @objc private func findAndReplace(_ sender: Any?) { currentSession?.showReplace() }
     @objc private func toggleEditing(_ sender: Any?) {
         guard let session = currentSession else { return }
         if session.mode == .read { session.mode = .edit }
@@ -177,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.target = self; item.representedObject = url; item.toolTip = url.path
         }
         menu.addItem(.separator())
-        let clear = menu.addItem(withTitle: "清除菜单", action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: "")
+        let clear = menu.addItem(withTitle: L10n.text("清除菜单"), action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: "")
         clear.target = NSDocumentController.shared
     }
 
@@ -196,42 +203,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return value
         }
         let app = submenu("EasyMarkdown")
-        item(app, "关于 EasyMarkdown", #selector(showAbout(_:)), "", self)
+        item(app, L10n.text("关于 EasyMarkdown"), #selector(showAbout(_:)), "", self)
         app.addItem(.separator())
-        item(app, "设置…", #selector(showSettings(_:)), ",", self)
+        item(app, L10n.text("设置…"), #selector(showSettings(_:)), ",", self)
         app.addItem(.separator())
-        item(app, "隐藏 EasyMarkdown", #selector(NSApplication.hide(_:)), "h", NSApp)
+        item(app, L10n.text("隐藏 EasyMarkdown"), #selector(NSApplication.hide(_:)), "h", NSApp)
         app.addItem(.separator())
-        item(app, "退出 EasyMarkdown", #selector(NSApplication.terminate(_:)), "q", NSApp)
+        item(app, L10n.text("退出 EasyMarkdown"), #selector(NSApplication.terminate(_:)), "q", NSApp)
 
-        let file = submenu("文件")
-        item(file, "打开…", #selector(openPanel(_:)), "o", self)
-        let recent = NSMenuItem(title: "最近使用", action: nil, keyEquivalent: "")
-        recentMenu = NSMenu(title: "最近使用"); recentMenu.delegate = self; recent.submenu = recentMenu
+        let file = submenu(L10n.text("文件"))
+        item(file, L10n.text("打开…"), #selector(openPanel(_:)), "o", self)
+        let recent = NSMenuItem(title: L10n.text("最近使用"), action: nil, keyEquivalent: "")
+        recentMenu = NSMenu(title: L10n.text("最近使用")); recentMenu.delegate = self; recent.submenu = recentMenu
         file.addItem(recent)
         file.addItem(.separator())
-        item(file, "保存", #selector(NSDocument.save(_:)), "s")
-        item(file, "另存为…", #selector(NSDocument.saveAs(_:)), "s", shift: true)
-        item(file, "关闭", #selector(NSWindow.performClose(_:)), "w")
+        item(file, L10n.text("保存"), #selector(NSDocument.save(_:)), "s")
+        item(file, L10n.text("另存为…"), #selector(NSDocument.saveAs(_:)), "s", shift: true)
+        item(file, L10n.text("关闭"), #selector(NSWindow.performClose(_:)), "w")
         file.addItem(.separator())
-        item(file, "打开起始窗口", #selector(showWelcome(_:)), "n", self)
+        item(file, L10n.text("打开起始窗口"), #selector(showWelcome(_:)), "n", self)
 
-        let edit = submenu("编辑")
-        item(edit, "撤销", NSSelectorFromString("undo:"), "z")
-        item(edit, "重做", NSSelectorFromString("redo:"), "z", shift: true)
+        let edit = submenu(L10n.text("编辑"))
+        item(edit, L10n.text("撤销"), NSSelectorFromString("undo:"), "z")
+        item(edit, L10n.text("重做"), NSSelectorFromString("redo:"), "z", shift: true)
         edit.addItem(.separator())
-        item(edit, "剪切", #selector(NSText.cut(_:)), "x")
-        item(edit, "复制", #selector(NSText.copy(_:)), "c")
-        item(edit, "粘贴", #selector(NSText.paste(_:)), "v")
-        item(edit, "全选", #selector(NSText.selectAll(_:)), "a")
+        item(edit, L10n.text("剪切"), #selector(NSText.cut(_:)), "x")
+        item(edit, L10n.text("复制"), #selector(NSText.copy(_:)), "c")
+        item(edit, L10n.text("粘贴"), #selector(NSText.paste(_:)), "v")
+        item(edit, L10n.text("全选"), #selector(NSText.selectAll(_:)), "a")
         edit.addItem(.separator())
-        item(edit, "查找…", #selector(find(_:)), "f", self)
-        item(edit, "查找下一个", #selector(findNext(_:)), "g", self)
-        item(edit, "编辑 / 完成", #selector(toggleEditing(_:)), "e", self)
+        item(edit, L10n.text("查找…"), #selector(find(_:)), "f", self)
+        item(edit, L10n.text("查找下一个"), #selector(findNext(_:)), "g", self)
+        item(edit, L10n.text("查找上一个"), #selector(findPrevious(_:)), "g", self, shift: true)
+        let replace = item(edit, L10n.text("查找并替换…"), #selector(findAndReplace(_:)), "f", self)
+        replace.keyEquivalentModifierMask = [.command, .option]
+        item(edit, L10n.text("编辑 / 完成"), #selector(toggleEditing(_:)), "e", self)
 
-        let window = submenu("窗口")
-        item(window, "最小化", #selector(NSWindow.performMiniaturize(_:)), "m")
-        item(window, "缩放", #selector(NSWindow.performZoom(_:)))
+        let window = submenu(L10n.text("窗口"))
+        item(window, L10n.text("最小化"), #selector(NSWindow.performMiniaturize(_:)), "m")
+        item(window, L10n.text("缩放"), #selector(NSWindow.performZoom(_:)))
         NSApp.windowsMenu = window
         NSApp.mainMenu = main
     }
@@ -242,10 +252,10 @@ private struct WelcomeView: View {
         VStack(spacing: 16) {
             Image(systemName: "doc.text").font(.system(size: 48, weight: .ultraLight)).foregroundStyle(.secondary)
             Text("EasyMarkdown").font(.system(size: 28, weight: .semibold, design: .rounded))
-            Text("安静阅读，随手修改。").foregroundStyle(.secondary)
-            Button("打开文档…") { (NSApp.delegate as? AppDelegate)?.openPanel(nil) }
+            Text(L10n.text("安静阅读，随手修改。")).foregroundStyle(.secondary)
+            Button(L10n.text("打开文档…")) { (NSApp.delegate as? AppDelegate)?.openPanel(nil) }
                 .buttonStyle(.borderedProminent).controlSize(.large).padding(.top, 8)
-            Text("也可以将 Markdown、TXT、JSON 或 XML 拖到这里")
+            Text(L10n.text("也可以将 Markdown、TXT、JSON 或 XML 拖到这里"))
                 .font(.caption).foregroundStyle(.tertiary)
             if !NSDocumentController.shared.recentDocumentURLs.isEmpty {
                 Divider().padding(.horizontal, 70).padding(.top, 8)
@@ -272,6 +282,7 @@ private struct WelcomeView: View {
 }
 
 private struct SettingsView: View {
+    @AppStorage(AppLanguage.preferenceKey) private var language = "system"
     @AppStorage("readerFontSize") var fontSize = 16.0
     @AppStorage("editorFontSize") var editorSize = 14.0
     @AppStorage("readerWidth") var width = 780.0
@@ -280,17 +291,33 @@ private struct SettingsView: View {
 
     var body: some View {
         Form {
-            Picker("外观", selection: $appearance) {
-                Text("跟随系统").tag("system"); Text("浅色").tag("light"); Text("深色").tag("dark")
+            Picker(L10n.text("应用语言"), selection: Binding(
+                get: { AppLanguage(rawValue: language)?.rawValue ?? "system" },
+                set: { value in AppLanguage.select(AppLanguage(rawValue: value) ?? .system) }
+            )) {
+                ForEach(AppLanguage.allCases, id: \.rawValue) { option in
+                    Text(option.title).tag(option.rawValue)
+                }
             }
-            Stepper("阅读字号：\(Int(fontSize))", value: $fontSize, in: 12...26)
-            Stepper("编辑字号：\(Int(editorSize))", value: $editorSize, in: 11...24)
-            Picker("阅读宽度", selection: $width) {
-                Text("紧凑").tag(660.0); Text("适中").tag(780.0); Text("宽松").tag(980.0)
-            }
-            Toggle("加载文档中的远程图片", isOn: $remoteImages)
-            Text("默认仅加载本地图片。开启后，会向图片所在的网站发送请求。")
+            .accessibilityIdentifier("app-language")
+            Text(L10n.text("语言更改将在下次启动时生效。请先保存文档，再退出并重新打开应用。"))
                 .font(.caption).foregroundStyle(.secondary)
-        }.formStyle(.grouped).frame(width: 470, height: 320)
+            if language != AppLanguage.launchChoice.rawValue {
+                Text(L10n.text("语言已更改，重新启动应用后生效。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("language-restart-notice")
+            }
+            Picker(L10n.text("外观"), selection: $appearance) {
+                Text(L10n.text("跟随系统")).tag("system"); Text(L10n.text("浅色")).tag("light"); Text(L10n.text("深色")).tag("dark")
+            }
+            Stepper(L10n.format("阅读字号：%d", Int(fontSize)), value: $fontSize, in: 12...26)
+            Stepper(L10n.format("编辑字号：%d", Int(editorSize)), value: $editorSize, in: 11...24)
+            Picker(L10n.text("阅读宽度"), selection: $width) {
+                Text(L10n.text("紧凑")).tag(660.0); Text(L10n.text("适中")).tag(780.0); Text(L10n.text("宽松")).tag(980.0)
+            }
+            Toggle(L10n.text("加载文档中的远程图片"), isOn: $remoteImages)
+            Text(L10n.text("默认仅加载本地图片。开启后，会向图片所在的网站发送请求。"))
+                .font(.caption).foregroundStyle(.secondary)
+        }.formStyle(.grouped).frame(width: 520, height: 450)
     }
 }

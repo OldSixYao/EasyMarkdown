@@ -101,6 +101,7 @@ struct MarkdownPreview: NSViewRepresentable {
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         coordinator.isDisposed = true
         coordinator.renderTask?.cancel()
+        coordinator.searchTask?.cancel()
         coordinator.renderTask = nil
         coordinator.ready = false
         coordinator.previousText = nil
@@ -123,6 +124,10 @@ struct MarkdownPreview: NSViewRepresentable {
         var previousScrollRequest = 0
         var previousSearch = ""
         var previousFindRequest = 0
+        var searchRevision = 0
+        var previousSearchRevision = -1
+        var searchSerial = 0
+        var searchTask: Task<Void, Never>?
         var rendering = false
         var pendingScroll: SplitScrollPosition?
         var hasAlignedScroll = false
@@ -169,7 +174,12 @@ struct MarkdownPreview: NSViewRepresentable {
             resources.root = parent.session.url?.deletingLastPathComponent()
             let text = parent.overrideText ?? parent.session.state.text
             let preferences: [String: Any] = ["fontSize": parent.fontSize, "width": parent.width,
-                "appearance": parent.appearance, "remoteImages": parent.remoteImages]
+                "appearance": parent.appearance, "remoteImages": parent.remoteImages,
+                "language": Bundle.main.preferredLocalizations.first ?? "zh-Hans",
+                "strings": ["copy": L10n.text("复制代码"), "copied": L10n.text("已复制"),
+                    "copyFailed": L10n.text("复制失败"), "content": L10n.text("文档内容"),
+                    "truncated": L10n.text("大文件已使用纯文本预览，仅显示前 500,000 个字符。编辑模式可查看和编辑全文。"),
+                    "remoteImage": L10n.text("远程图片未加载")]]
             let preferencesKey = "\(parent.fontSize):\(parent.width):\(parent.appearance):\(parent.remoteImages):\(parent.session.url?.absoluteString ?? ""):\(parent.session.kind.rawValue)"
             if !rendering && (previousText != text || previousPreferences != preferencesKey) {
                 renderTask?.cancel()
@@ -182,11 +192,7 @@ struct MarkdownPreview: NSViewRepresentable {
                     self.render(text: text, preferences: preferences, preferencesKey: preferencesKey)
                 }
             }
-            if previousSearch != parent.session.search || previousFindRequest != parent.session.findRequest {
-                previousSearch = parent.session.search
-                previousFindRequest = parent.session.findRequest
-                webView.find(previousSearch, configuration: WKFindConfiguration()) { _ in }
-            }
+            updateSearch()
             if let target = parent.session.scrollTarget,
                target != previousTarget || parent.session.scrollRequest != previousScrollRequest {
                 previousTarget = target
@@ -196,8 +202,49 @@ struct MarkdownPreview: NSViewRepresentable {
             }
         }
 
+        private func updateSearch() {
+            guard parent.overrideText == nil, !rendering,
+                  previousText == parent.session.state.text, let webView else { return }
+            let session = parent.session
+            let query = session.showFind && session.mode == .read ? session.search : ""
+            guard query != previousSearch || session.findRequest != previousFindRequest ||
+                    searchRevision != previousSearchRevision else { return }
+            let changed = query != previousSearch || searchRevision != previousSearchRevision
+            previousSearch = query
+            previousFindRequest = session.findRequest
+            previousSearchRevision = searchRevision
+            searchTask?.cancel()
+            searchSerial += 1
+            let serial = searchSerial
+            let revision = searchRevision
+            let request = session.findRequest
+            let backwards = session.findBackwards
+            let offset = session.findOffset
+            searchTask = Task { @MainActor [weak self, weak webView] in
+                if changed && !query.isEmpty { try? await Task.sleep(for: .milliseconds(120)) }
+                guard !Task.isCancelled, let self, !self.isDisposed, let webView else { return }
+                webView.callAsyncJavaScript("return window.updateReaderSearch(query, backwards, request, offset)",
+                    arguments: ["query": query, "backwards": backwards, "request": request, "offset": offset], in: nil, in: .page) { [weak self] result in
+                        guard let self, !self.isDisposed, self.searchSerial == serial,
+                              self.searchRevision == revision, !self.rendering,
+                              self.previousText == self.parent.session.state.text else { return }
+                        let session = self.parent.session
+                        let current = session.showFind && session.mode == .read ? session.search : ""
+                        guard current == query, session.findRequest == request else { return }
+                        if case .success(let value) = result, let value = value as? [String: Any],
+                           value["query"] as? String == query, let count = value["count"] as? Int {
+                            session.searchResultCount = query.isEmpty ? nil : count
+                            session.searchIsTruncated = value["truncated"] as? Bool ?? false
+                        }
+                    }
+            }
+        }
+
         private func render(text: String, preferences: [String: Any], preferencesKey: String) {
             guard let webView, ready, !rendering else { return }
+            searchTask?.cancel()
+            searchSerial += 1
+            searchRevision += 1
             previousText = text; previousPreferences = preferencesKey; rendering = true
             let position = UserDefaults.standard.dictionary(forKey: positionKey) ?? [:]
             // The reader already truncates at 500k characters; don't transfer 24 MB to
@@ -209,7 +256,7 @@ struct MarkdownPreview: NSViewRepresentable {
                     "position": position], in: nil, in: .page) { [weak self] result in
                 guard let self, !self.isDisposed else { return }
                 self.rendering = false
-                if case .failure(let error) = result { self.parent.session.errorMessage = "预览失败：\(error.localizedDescription)" }
+                if case .failure(let error) = result { self.parent.session.errorMessage = L10n.format("预览失败：%@", error.localizedDescription) }
                 else {
                     self.update()
                     if !self.hasAlignedScroll && self.parent.overrideText == nil && self.parent.session.mode == .split {
@@ -253,6 +300,14 @@ struct MarkdownPreview: NSViewRepresentable {
                 parent.session.previewDidScroll(SplitScrollPosition(offset: offset, progress: progress))
             case "link":
                 if let href = body["payload"] as? String { openLink(href) }
+            case "copyCode":
+                guard let payload = body["payload"] as? [String: Any],
+                      let request = payload["request"] as? Int,
+                      let text = payload["text"] as? String else { return }
+                NSPasteboard.general.clearContents()
+                let success = NSPasteboard.general.setString(text, forType: .string)
+                webView?.callAsyncJavaScript("window.completeCodeCopy(request, success)",
+                    arguments: ["request": request, "success": success], in: nil, in: .page, completionHandler: nil)
             default: break
             }
         }

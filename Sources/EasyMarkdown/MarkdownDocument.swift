@@ -77,7 +77,7 @@ final class MarkdownDocument: NSDocument {
             guard let self else { return }
             self.fileURL = newURL
             self.session.start()
-            self.session.flash("文件位置已更新")
+            self.session.flash(L10n.text("文件位置已更新"))
         }
     }
 

@@ -1,0 +1,3 @@
+/* Main-bundle names for the app's supported Simplified Chinese language. */
+"CFBundleDisplayName" = "EasyMarkdown";
+"EasyMarkdown Document" = "EasyMarkdown 文档";

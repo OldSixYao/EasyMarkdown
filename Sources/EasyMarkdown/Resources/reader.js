@@ -1,5 +1,6 @@
 /* All document content is untrusted. Sanitize before insertion; never interpolate it into JS. */
 const content = document.getElementById('content');
+const copyStatus = document.getElementById('copy-status');
 const send = (type, payload) => window.webkit?.messageHandlers.reader?.postMessage({type, payload});
 let lastPosition = null;
 let restoring = false;
@@ -7,6 +8,7 @@ let imageResizeObserver;
 let sourceBlocks = [];
 let synchronizedY = null;
 let renderGeneration = 0;
+let previewTruncated = false;
 let sourceScrollTimer;
 let renderedBlocks = [];
 let renderContext = '';
@@ -14,6 +16,47 @@ let readingBlocks = [];
 let readingKeys = new Map();
 let headingElements = [];
 let lastActiveHeading;
+const copyTargets = new WeakMap();
+const pendingCopies = new Map();
+let nextCopyRequest = 0;
+let readerStrings = {copy:'复制代码', copied:'已复制', copyFailed:'复制失败', content:'文档内容',
+  truncated:'大文件已使用纯文本预览，仅显示前 500,000 个字符。编辑模式可查看和编辑全文。', remoteImage:'远程图片未加载'};
+
+function makeCopyButton(target) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.tabIndex = 0;
+  button.className = 'code-copy-button';
+  button.title = readerStrings.copy;
+  button.setAttribute('aria-label', readerStrings.copy);
+  const icon = document.createElement('span');
+  icon.className = 'code-copy-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  button.append(icon);
+  copyTargets.set(button, {target, request:null, timer:null});
+  return button;
+}
+
+window.completeCodeCopy = function(request, success) {
+  const button = pendingCopies.get(request)?.deref();
+  pendingCopies.delete(request);
+  const state = button && copyTargets.get(button);
+  if (!state || state.request !== request || !button.isConnected) return;
+  clearTimeout(state.timer);
+  button.dataset.copyState = success ? 'success' : 'failure';
+  const feedback = success ? readerStrings.copied : readerStrings.copyFailed;
+  button.dataset.feedback = feedback;
+  button.title = feedback;
+  button.setAttribute('aria-label', feedback);
+  copyStatus.textContent = feedback;
+  state.timer = setTimeout(() => {
+    delete button.dataset.copyState;
+    delete button.dataset.feedback;
+    button.title = readerStrings.copy;
+    button.setAttribute('aria-label', readerStrings.copy);
+    state.request = null;
+  }, 1500);
+};
 
 function updateActiveHeading() {
   let id = null;
@@ -113,6 +156,10 @@ function restorePosition(position) {
 }
 
 window.updateDocument = function(text, kind, baseURL, preferences, savedPosition) {
+  readerStrings = {...readerStrings, ...preferences.strings};
+  document.documentElement.lang = preferences.language || 'zh-Hans';
+  content.setAttribute('aria-label', readerStrings.content);
+  invalidateReaderSearch();
   const generation = ++renderGeneration;
   lastActiveHeading = undefined;
   const position = content.childElementCount ? capturePosition() : savedPosition;
@@ -122,6 +169,7 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
   document.documentElement.dataset.appearance = preferences.appearance;
   const limit = 500000;
   const truncated = text.length > limit;
+  previewTruncated = truncated;
   const source = truncated ? text.slice(0, limit) : text;
   let nextContent;
   let pendingNodes = null;
@@ -210,7 +258,7 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
   }
   if (truncated) {
     const notice = document.createElement('div'); notice.className = 'notice';
-    notice.textContent = '大文件已使用纯文本预览，仅显示前 500,000 个字符。编辑模式可查看和编辑全文。';
+    notice.textContent = readerStrings.truncated;
     nextContent.prepend(notice);
   }
   const changedMatching = selector => changedElements.flatMap(element =>
@@ -227,7 +275,7 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
       } else if (['https:','http:'].includes(resolved.protocol)) {
         if (!preferences.remoteImages) {
           const placeholder = document.createElement('span'); placeholder.className = 'image-placeholder';
-          placeholder.textContent = '[远程图片未加载' + (img.alt ? '：' + img.alt : '') + ']';
+          placeholder.textContent = '[' + readerStrings.remoteImage + (img.alt ? ': ' + img.alt : '') + ']';
           img.replaceWith(placeholder);
           imageReplacements.set(img, placeholder);
         } else { img.referrerPolicy = 'no-referrer'; img.loading = 'lazy'; }
@@ -265,6 +313,29 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
     changedMatching('pre code[class*=language-]').forEach(el => {
       try { hljs.highlightElement(el); } catch { /* Unsupported language remains plain text. */ }
     });
+  }
+  if (kind === 'markdown' && !truncated) {
+    changedMatching('pre').forEach(pre => {
+      // Keep the pre itself as the source/reading anchor. Only its body scrolls.
+      const scroll = document.createElement('div');
+      scroll.className = 'code-copy-scroll';
+      while (pre.firstChild) scroll.append(pre.firstChild);
+      pre.classList.add('code-copy-block');
+      pre.append(scroll, makeCopyButton(scroll));
+    });
+    const replacements = new Map();
+    changedMatching('code').filter(code => !code.closest('pre')).forEach(code => {
+      const wrapper = document.createElement('span');
+      wrapper.className = 'code-copy-inline';
+      const topLevel = code.parentNode === content;
+      code.replaceWith(wrapper);
+      wrapper.append(code, makeCopyButton(code));
+      if (topLevel) replacements.set(code, wrapper);
+    });
+    if (replacements.size) {
+      for (const block of renderedBlocks) block.nodes = block.nodes.map(node => replacements.get(node) || node);
+      for (const block of sourceBlocks) block.element = replacements.get(block.element) || block.element;
+    }
   }
   updateReadingBlocks();
   send('headings', headings);
@@ -321,6 +392,19 @@ addEventListener('scroll', () => {
 addEventListener('resize', () => { if (!restoring) updateActiveHeading(); }, {passive:true});
 
 content.addEventListener('click', event => {
+  const button = event.target.closest('button');
+  const state = button && copyTargets.get(button);
+  if (state) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearTimeout(state.timer);
+    if (state.request !== null) pendingCopies.delete(state.request);
+    const request = ++nextCopyRequest;
+    state.request = request;
+    pendingCopies.set(request, new WeakRef(button));
+    send('copyCode', {request, text:state.target.textContent});
+    return;
+  }
   const link = event.target.closest('a');
   if (!link) return;
   event.preventDefault();

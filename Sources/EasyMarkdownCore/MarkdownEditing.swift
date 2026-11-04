@@ -7,21 +7,21 @@ public enum MarkdownCommand: Equatable, Sendable {
 
     public var title: String {
         switch self {
-        case .heading(let level): return "\(level) 级标题"
-        case .paragraph: return "正文"
-        case .bold: return "粗体"
-        case .italic: return "斜体"
-        case .strikethrough: return "删除线"
-        case .quote: return "引用"
-        case .bulletList: return "无序列表"
-        case .orderedList: return "有序列表"
-        case .taskList: return "任务列表"
-        case .inlineCode: return "行内代码"
-        case .codeBlock: return "代码块"
-        case .link: return "链接"
-        case .image: return "图片"
-        case .table: return "表格"
-        case .horizontalRule: return "分隔线"
+        case .heading(let level): return L10n.format("%d 级标题", level)
+        case .paragraph: return L10n.text("正文")
+        case .bold: return L10n.text("粗体")
+        case .italic: return L10n.text("斜体")
+        case .strikethrough: return L10n.text("删除线")
+        case .quote: return L10n.text("引用")
+        case .bulletList: return L10n.text("无序列表")
+        case .orderedList: return L10n.text("有序列表")
+        case .taskList: return L10n.text("任务列表")
+        case .inlineCode: return L10n.text("行内代码")
+        case .codeBlock: return L10n.text("代码块")
+        case .link: return L10n.text("链接")
+        case .image: return L10n.text("图片")
+        case .table: return L10n.text("表格")
+        case .horizontalRule: return L10n.text("分隔线")
         }
     }
 }
@@ -82,31 +82,31 @@ public enum MarkdownEditing {
         }
 
         switch command {
-        case .bold: return wrap("**", placeholder: "粗体文字")
-        case .italic: return wrap("*", placeholder: "斜体文字")
-        case .strikethrough: return wrap("~~", placeholder: "删除线文字")
+        case .bold: return wrap("**", placeholder: L10n.text("粗体文字"))
+        case .italic: return wrap("*", placeholder: L10n.text("斜体文字"))
+        case .strikethrough: return wrap("~~", placeholder: L10n.text("删除线文字"))
         case .inlineCode:
             let runs = selected.components(separatedBy: CharacterSet(charactersIn: "`").inverted)
                 .map(\.count).max() ?? 0
             let delimiter = String(repeating: "`", count: max(1, runs + 1))
-            let body = selected.isEmpty ? "代码" : selected
+            let body = selected.isEmpty ? L10n.text("代码") : selected
             let padding = body.hasPrefix("`") || body.hasSuffix("`") ||
                 (body.hasPrefix(" ") && body.hasSuffix(" ") && !body.trimmingCharacters(in: .whitespaces).isEmpty) ? " " : ""
             return replace(delimiter + padding + body + padding + delimiter,
                 select: NSRange(location: delimiter.count + padding.count, length: (body as NSString).length))
         case .link, .image:
             let isImage = command == .image
-            let label = selected.isEmpty ? (isImage ? "图片说明" : "链接文字") : selected
+            let label = selected.isEmpty ? (isImage ? L10n.text("图片说明") : L10n.text("链接文字")) : selected
             let escaped = label.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]")
             let prefix = (isImage ? "![" : "[") + escaped + "]("
-            let destination = isImage ? "图片路径" : "https://example.com"
+            let destination = isImage ? L10n.text("图片路径") : "https://example.com"
             return replace(prefix + destination + ")",
                            select: NSRange(location: (prefix as NSString).length, length: (destination as NSString).length))
         case .codeBlock:
             let target = lineRange(source, selection: range)
             let raw = source.substring(with: target)
-            let body = raw.isEmpty ? "代码" : raw
+            let body = raw.isEmpty ? L10n.text("代码") : raw
             let longest = body.components(separatedBy: CharacterSet(charactersIn: "`").inverted)
                 .map(\.count).max() ?? 0
             let fence = String(repeating: "`", count: max(3, longest + 1))
@@ -125,12 +125,12 @@ public enum MarkdownEditing {
             return replace(insertion, range: NSRange(location: position, length: 0),
                            select: NSRange(location: (insertion as NSString).length, length: 0))
         case .table:
-            let cell = selected.isEmpty ? "内容" : selected.replacingOccurrences(of: "|", with: "\\|")
+            let cell = selected.isEmpty ? L10n.text("内容") : selected.replacingOccurrences(of: "|", with: "\\|")
                 .replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ")
             let before = source.substring(to: start)
             let lead = before.isEmpty || before.hasSuffix(newline + newline) ? "" : before.hasSuffix(newline) ? newline : newline + newline
-            let prefix = lead + "| 标题 1 | 标题 2 |" + newline + "| --- | --- |" + newline + "| "
-            return replace(prefix + cell + " | 内容 |" + newline + newline,
+            let prefix = lead + L10n.text("| 标题 1 | 标题 2 |") + newline + "| --- | --- |" + newline + "| "
+            return replace(prefix + cell + L10n.text(" | 内容 |") + newline + newline,
                            select: NSRange(location: (prefix as NSString).length, length: (cell as NSString).length))
         default:
             return lineEdit(command, source: source, selection: range, newline: newline)
@@ -198,9 +198,9 @@ public enum MarkdownEditing {
             var body = stripped
             if body.isEmpty && !remove && selection.length == 0 {
                 switch command {
-                case .heading: body = "标题"
-                case .quote: body = "引用文字"
-                default: body = "列表项"
+                case .heading: body = L10n.text("标题")
+                case .quote: body = L10n.text("引用文字")
+                default: body = L10n.text("列表项")
                 }
                 placeholderSelection = NSRange(location: (indentation + prefix as NSString).length, length: (body as NSString).length)
             }

@@ -4,6 +4,11 @@ import EasyMarkdownCore
 
 enum ViewMode: String, CaseIterable { case read = "阅读", edit = "编辑", split = "分栏" }
 
+struct EditorFindRequest {
+    let action: NSTextFinder.Action
+    var query: String? = nil
+}
+
 struct Heading: Identifiable, Decodable {
     let id: String
     let title: String
@@ -16,8 +21,17 @@ final class DocumentSession {
     var mode: ViewMode = .read
     var showOutline = false
     var showFind = false
-    var search = ""
+    var search = "" {
+        didSet {
+            if search != oldValue { searchResultCount = nil; findBackwards = false }
+        }
+    }
     var findRequest = 0
+    var findBackwards = false
+    var findOffset = 0
+    var searchResultCount: Int?
+    var searchIsTruncated = false
+    var pendingEditorFind: EditorFindRequest?
     var headings: [Heading] = []
     var activeHeadingID: String?
     var scrollTarget: String?
@@ -28,9 +42,9 @@ final class DocumentSession {
     var isSaving = false
     var saveFailure: String?
     var saveStateLabel: String {
-        if isSaving { return "正在保存…" }
-        if state.isDirty { return saveFailure == nil ? "未保存" : "保存失败 · 未保存" }
-        return "已保存"
+        if isSaving { return L10n.text("正在保存…") }
+        if state.isDirty { return saveFailure == nil ? L10n.text("未保存") : L10n.text("保存失败 · 未保存") }
+        return L10n.text("已保存")
     }
     var showExternal = false
     var synchronizeSplitScroll = true
@@ -47,10 +61,53 @@ final class DocumentSession {
     @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored var replaceText: ((String) -> Void)?
     @ObservationIgnored var applyMarkdown: ((MarkdownCommand) -> Void)?
-    @ObservationIgnored var findInEditor: (() -> Void)?
+    @ObservationIgnored var editorFindAction: ((EditorFindRequest) -> Bool)?
     @ObservationIgnored var scrollEditorTo: ((SplitScrollPosition) -> Void)?
     @ObservationIgnored var scrollPreviewTo: ((SplitScrollPosition) -> Void)?
     @ObservationIgnored var alignPreviewToEditor: (() -> Void)?
+
+    func showSearch() {
+        if mode == .read { showFind = true }
+        else { requestEditorFind(.showFindInterface) }
+    }
+
+    func closeSearch() {
+        showFind = false
+        search = ""
+        searchResultCount = nil
+    }
+
+    func navigateSearch(backwards: Bool = false) {
+        if mode == .read {
+            guard !search.isEmpty else { return }
+            showFind = true
+            findBackwards = backwards
+            findOffset += backwards ? -1 : 1
+            findRequest += 1
+        } else {
+            requestEditorFind(backwards ? .previousMatch : .nextMatch)
+        }
+    }
+
+    func showReplace() {
+        guard !isSaving else { return }
+        let query = mode == .read ? search : nil
+        showFind = false
+        searchResultCount = nil
+        if mode == .read { mode = .edit }
+        requestEditorFind(.showReplaceInterface, query: query)
+    }
+
+    func requestEditorFind(_ action: NSTextFinder.Action, query: String? = nil) {
+        pendingEditorFind = EditorFindRequest(action: action, query: query)
+        flushEditorFindRequest()
+    }
+
+    func flushEditorFindRequest() {
+        guard mode != .read, let request = pendingEditorFind,
+              editorFindAction?(request) == true else { return }
+        pendingEditorFind = nil
+    }
 
     func editorDidScroll(_ position: SplitScrollPosition) {
         guard mode == .split, synchronizeSplitScroll else { return }
@@ -83,7 +140,7 @@ final class DocumentSession {
                     let draft = try await DraftStore.shared.load(url)
                     guard let self, !self.closed, let draft, draft.text != self.state.text else { return }
                     self.recovery = draft
-                } catch { self?.errorMessage = "恢复草稿无法读取：\(error.localizedDescription)" }
+                } catch { self?.errorMessage = L10n.format("恢复草稿无法读取：%@", error.localizedDescription) }
             }
         }
     }
@@ -93,7 +150,8 @@ final class DocumentSession {
         pollTask?.cancel(); reloadTask?.cancel(); draftTask?.cancel(); statusTask?.cancel(); watchTask?.cancel()
         pollTask = nil; reloadTask = nil; draftTask = nil; statusTask = nil
         watchTask = nil
-        replaceText = nil; applyMarkdown = nil; findInEditor = nil
+        replaceText = nil; applyMarkdown = nil; editorFindAction = nil
+        pendingEditorFind = nil
         scrollEditorTo = nil; scrollPreviewTo = nil; alignPreviewToEditor = nil
         recovery = nil
         headings = []
@@ -150,14 +208,14 @@ final class DocumentSession {
             state.receive(snapshot)
             lastSignature = signature
             synchronizeDirtyState()
-            if changed && !state.hasConflict { flash("已加载最新内容") }
+            if changed && !state.hasConflict { flash(L10n.text("已加载最新内容")) }
         } catch {
             guard !closed, !Task.isCancelled, generation == reloadGeneration else { return }
             // Atomic replacement can briefly remove the path. Retry through the poll loop.
             if !FileManager.default.fileExists(atPath: url.path) {
                 state.markMissing()
             } else {
-                status = "暂时无法更新：\(error.localizedDescription)"
+                status = L10n.format("暂时无法更新：%@", error.localizedDescription)
             }
         }
     }
@@ -185,7 +243,7 @@ final class DocumentSession {
                     try await DraftStore.shared.save(draft, for: url)
                 }
                 else { try await DraftStore.shared.remove(url) }
-            } catch { self.status = "草稿暂存失败：\(error.localizedDescription)" }
+            } catch { self.status = L10n.format("草稿暂存失败：%@", error.localizedDescription) }
         }
     }
 
@@ -210,9 +268,9 @@ final class DocumentSession {
 
     func acceptExternal() {
         let alert = NSAlert()
-        alert.messageText = "加载外部版本？"
-        alert.informativeText = "本地尚未保存的修改将被放弃。你也可以先将本地内容另存为。"
-        alert.addButton(withTitle: "加载外部版本"); alert.addButton(withTitle: "取消")
+        alert.messageText = L10n.text("加载外部版本？")
+        alert.informativeText = L10n.text("本地尚未保存的修改将被放弃。你也可以先将本地内容另存为。")
+        alert.addButton(withTitle: L10n.text("加载外部版本")); alert.addButton(withTitle: L10n.text("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         state.acceptExternal()
         document?.undoManager?.removeAllActions()
@@ -253,7 +311,7 @@ final class DocumentSession {
         if state.isDirty { scheduleDraft() }
         synchronizeDirtyState()
         watchDirectory()
-        flash("已保存")
+        flash(L10n.text("已保存"))
     }
 
     func saveAs() { document?.saveAs(nil) }

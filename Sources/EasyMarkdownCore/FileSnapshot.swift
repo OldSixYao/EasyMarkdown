@@ -5,10 +5,10 @@ public enum DocumentError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .tooLarge: return "文件超过首版支持的 24 MB 上限，请使用其他编辑器打开。"
-        case .unsupportedEncoding: return "无法按 UTF-8 或带 BOM 的 UTF-16 读取文件。请先将文件转换为 UTF-8。"
-        case .externalChange: return "文件已在其他位置修改。请先处理外部版本，或将本地内容另存为。"
-        case .missingFile: return "文件已被移动或删除。当前内容已保留，你可以另存为。"
+        case .tooLarge: return L10n.text("文件超过首版支持的 24 MB 上限，请使用其他编辑器打开。")
+        case .unsupportedEncoding: return L10n.text("无法按 UTF-8 或带 BOM 的 UTF-16 读取文件。请先将文件转换为 UTF-8。")
+        case .externalChange: return L10n.text("文件已在其他位置修改。请先处理外部版本，或将本地内容另存为。")
+        case .missingFile: return L10n.text("文件已被移动或删除。当前内容已保留，你可以另存为。")
         case .invalidFormat(let message): return message
         }
     }
