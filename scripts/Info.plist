@@ -9,8 +9,8 @@
   <key>CFBundleExecutable</key><string>EasyMarkdown</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.1.13</string>
-  <key>CFBundleVersion</key><string>14</string>
+  <key>CFBundleShortVersionString</key><string>0.1.20</string>
+  <key>CFBundleVersion</key><string>21</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -21,8 +21,63 @@
     <key>LSHandlerRank</key><string>Alternate</string>
     <key>CFBundleTypeExtensions</key><array>
       <string>md</string><string>markdown</string><string>mdown</string><string>mkd</string>
-      <string>txt</string><string>json</string><string>xml</string><string>yaml</string><string>yml</string><string>toml</string><string>csv</string>
+      <string>txt</string><string>json</string><string>xml</string><string>yaml</string><string>yml</string><string>toml</string><string>ini</string><string>conf</string><string>cfg</string><string>cnf</string><string>env</string><string>properties</string><string>jsonc</string><string>csv</string>
     </array>
-    <key>LSItemContentTypes</key><array><string>public.plain-text</string><string>public.text</string><string>public.json</string><string>public.xml</string><string>net.daringfireball.markdown</string></array>
+    <key>LSItemContentTypes</key><array><string>public.plain-text</string><string>public.text</string><string>public.json</string><string>public.xml</string><string>net.daringfireball.markdown</string><string>public.yaml</string><string>app.easymarkdown.toml</string><string>app.easymarkdown.ini</string><string>app.easymarkdown.configuration</string><string>app.easymarkdown.environment</string><string>app.easymarkdown.properties</string><string>app.easymarkdown.jsonc</string></array>
   </dict></array>
+  <key>UTImportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>net.daringfireball.markdown</string>
+    <key>UTTypeDescription</key><string>Markdown</string>
+    <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+    <key>UTTypeTagSpecification</key><dict>
+      <key>public.filename-extension</key><array><string>md</string><string>markdown</string><string>mdown</string><string>mkd</string></array>
+      <key>public.mime-type</key><string>text/markdown</string>
+    </dict>
+  </dict><dict>
+    <key>UTTypeIdentifier</key><string>public.yaml</string>
+    <key>UTTypeDescription</key><string>YAML</string>
+    <key>UTTypeConformsTo</key><array><string>public.text</string></array>
+    <key>UTTypeTagSpecification</key><dict>
+      <key>public.filename-extension</key><array><string>yaml</string><string>yml</string></array>
+      <key>public.mime-type</key><string>application/yaml</string>
+    </dict>
+  </dict></array>
+  <key>UTExportedTypeDeclarations</key><array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.easymarkdown.toml</string>
+      <key>UTTypeDescription</key><string>TOML</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>toml</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.easymarkdown.ini</string>
+      <key>UTTypeDescription</key><string>INI</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>ini</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.easymarkdown.configuration</string>
+      <key>UTTypeDescription</key><string>Configuration</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>conf</string><string>cfg</string><string>cnf</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.easymarkdown.environment</string>
+      <key>UTTypeDescription</key><string>Environment</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>env</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.easymarkdown.properties</string>
+      <key>UTTypeDescription</key><string>Java Properties</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>properties</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.easymarkdown.jsonc</string>
+      <key>UTTypeDescription</key><string>JSON with Comments</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>jsonc</string></array></dict>
+    </dict>
+  </array>
 </dict></plist>

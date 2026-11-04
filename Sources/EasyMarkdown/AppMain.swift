@@ -40,6 +40,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--configuration-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await ConfigurationCheck.run(output: output) }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--language-test"),
            CommandLine.arguments.indices.contains(index + 1) {
             let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
@@ -115,8 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.text, .json, .xml, .sourceCode,
-            UTType(filenameExtension: "md") ?? .plainText]
+        panel.allowedContentTypes = [.text, .sourceCode] + DefaultEditorFormat.allCases.map(\.contentType)
+        panel.showsHiddenFiles = true
         panel.allowsOtherFileTypes = true
         if panel.runModal() == .OK { panel.urls.forEach(open) }
     }
@@ -147,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hosting = NSHostingController(rootView: SettingsView())
         hosting.sizingOptions = []
         window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 520, height: 450))
+        window.setContentSize(NSSize(width: 560, height: 650))
         window.center()
         settings = NSWindowController(window: window)
         settings?.showWindow(nil)
@@ -255,7 +261,7 @@ private struct WelcomeView: View {
             Text(L10n.text("安静阅读，随手修改。")).foregroundStyle(.secondary)
             Button(L10n.text("打开文档…")) { (NSApp.delegate as? AppDelegate)?.openPanel(nil) }
                 .buttonStyle(.borderedProminent).controlSize(.large).padding(.top, 8)
-            Text(L10n.text("也可以将 Markdown、TXT、JSON 或 XML 拖到这里"))
+            Text(L10n.text("也可以拖入 Markdown、文本或 YAML、TOML 等配置文件"))
                 .font(.caption).foregroundStyle(.tertiary)
             if !NSDocumentController.shared.recentDocumentURLs.isEmpty {
                 Divider().padding(.horizontal, 70).padding(.top, 8)
@@ -281,7 +287,10 @@ private struct WelcomeView: View {
     }
 }
 
+private typealias SettingsState<Value> = State<Value>
+
 private struct SettingsView: View {
+    @SettingsState private var defaultEditor = DefaultEditorSettings()
     @AppStorage(AppLanguage.preferenceKey) private var language = "system"
     @AppStorage("readerFontSize") var fontSize = 16.0
     @AppStorage("editorFontSize") var editorSize = 14.0
@@ -318,6 +327,11 @@ private struct SettingsView: View {
             Toggle(L10n.text("加载文档中的远程图片"), isOn: $remoteImages)
             Text(L10n.text("默认仅加载本地图片。开启后，会向图片所在的网站发送请求。"))
                 .font(.caption).foregroundStyle(.secondary)
-        }.formStyle(.grouped).frame(width: 520, height: 450)
+            DefaultEditorSection(settings: defaultEditor)
+        }.formStyle(.grouped).frame(width: 560, height: 650)
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                defaultEditor.refresh()
+            }
+            .onAppear { defaultEditor.refresh() }
     }
 }

@@ -110,7 +110,7 @@ import EasyMarkdownCore
                 try await wait("external conflict banner") { doc.session.state.external != nil }
                 try await ScreenshotCapture.capture(window, to: output.appendingPathComponent("conflict-narrow.png"))
                 try Data(source.utf8).write(to: file, options: .atomic)
-                await doc.session.reload(force: true)
+                await doc.session.reload(force: true)?.value
                 doc.session.state = DocumentState(snapshot: try FileSnapshot(data: Data(source.utf8)))
                 doc.session.recovery = RecoveryDraft(baseline: Data(source.utf8), text: source + "draft", savedAt: Date())
                 try await ScreenshotCapture.capture(window, to: output.appendingPathComponent("recovery-narrow.png"))

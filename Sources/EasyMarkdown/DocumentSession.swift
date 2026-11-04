@@ -52,6 +52,7 @@ final class DocumentSession {
     @ObservationIgnored let store = FileStore()
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var draftTask: Task<Void, Never>?
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private var directorySource: DispatchSourceFileSystemObject?
@@ -130,7 +131,9 @@ final class DocumentSession {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard self?.closed == false else { return }
-                await self?.reload(force: false)
+                // End the synchronous access to self before waiting for file I/O.
+                let load = self?.reload(force: false)
+                await load?.value
                 try? await Task.sleep(for: .milliseconds(800))
             }
         }
@@ -147,8 +150,9 @@ final class DocumentSession {
 
     func stop(discardDraft: Bool) {
         closed = true
-        pollTask?.cancel(); reloadTask?.cancel(); draftTask?.cancel(); statusTask?.cancel(); watchTask?.cancel()
+        pollTask?.cancel(); reloadTask?.cancel(); loadTask?.cancel(); draftTask?.cancel(); statusTask?.cancel(); watchTask?.cancel()
         pollTask = nil; reloadTask = nil; draftTask = nil; statusTask = nil
+        loadTask = nil
         watchTask = nil
         replaceText = nil; applyMarkdown = nil; editorFindAction = nil
         pendingEditorFind = nil
@@ -187,37 +191,47 @@ final class DocumentSession {
     }
 
     func scheduleReload() {
+        guard !closed else { return }
         reloadTask?.cancel()
         reloadTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            await self?.reload(force: true)
+            let load = self?.reload(force: true)
+            await load?.value
         }
     }
 
-    func reload(force: Bool) async {
-        guard !closed, !isSaving, let url else { return }
+    @discardableResult
+    func reload(force: Bool) -> Task<Void, Never>? {
+        guard !closed, !isSaving, let url else { return nil }
+        loadTask?.cancel()
         reloadGeneration += 1
         let generation = reloadGeneration
-        do {
-            let signature = try await store.signature(url)
-            guard force || signature != lastSignature else { return }
-            let snapshot = try await store.read(url)
-            guard !closed, !Task.isCancelled, self.url == url, !isSaving, generation == reloadGeneration else { return }
-            let changed = snapshot.data != state.baseline.data
-            state.receive(snapshot)
-            lastSignature = signature
-            synchronizeDirtyState()
-            if changed && !state.hasConflict { flash(L10n.text("已加载最新内容")) }
-        } catch {
-            guard !closed, !Task.isCancelled, generation == reloadGeneration else { return }
-            // Atomic replacement can briefly remove the path. Retry through the poll loop.
-            if !FileManager.default.fileExists(atPath: url.path) {
-                state.markMissing()
-            } else {
-                status = L10n.format("暂时无法更新：%@", error.localizedDescription)
+        loadTask = Task { [weak self, store, lastSignature] in
+            do {
+                try Task.checkCancellation()
+                let signature = try await store.signature(url)
+                try Task.checkCancellation()
+                guard force || signature != lastSignature else { return }
+                let snapshot = try await store.read(url)
+                guard !Task.isCancelled, let self, !self.closed, self.url == url,
+                      !self.isSaving, generation == self.reloadGeneration else { return }
+                let changed = snapshot.data != self.state.baseline.data
+                self.state.receive(snapshot)
+                self.lastSignature = signature
+                self.synchronizeDirtyState()
+                if changed && !self.state.hasConflict { self.flash(L10n.text("已加载最新内容")) }
+            } catch {
+                guard !Task.isCancelled else { return }
+                let missing = await store.isMissing(url)
+                guard !Task.isCancelled, let self, !self.closed, self.url == url,
+                      !self.isSaving, generation == self.reloadGeneration else { return }
+                // Atomic replacement can briefly remove the path. Retry through the poll loop.
+                if missing { self.state.markMissing() }
+                else { self.status = L10n.format("暂时无法更新：%@", error.localizedDescription) }
             }
         }
+        return loadTask
     }
 
     func edit(_ text: String) {
@@ -228,6 +242,7 @@ final class DocumentSession {
 
     func synchronizeDirtyState() {
         guard let document else { return }
+        document.updateUndoLimit(forByteCount: state.text.utf8.count)
         document.updateChangeCount(state.isDirty ? .changeDone : .changeCleared)
     }
 
@@ -236,14 +251,17 @@ final class DocumentSession {
         guard let url else { return }
         draftTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, let self, !self.closed else { return }
+            guard !Task.isCancelled, self?.closed == false, let state = self?.state else { return }
             do {
-                if self.state.isDirty {
-                    let draft = RecoveryDraft(baseline: self.state.baseline.data, text: self.state.text, savedAt: Date())
+                if state.isDirty {
+                    let draft = RecoveryDraft(baseline: state.baseline.data, text: state.text, savedAt: Date())
                     try await DraftStore.shared.save(draft, for: url)
                 }
                 else { try await DraftStore.shared.remove(url) }
-            } catch { self.status = L10n.format("草稿暂存失败：%@", error.localizedDescription) }
+            } catch {
+                guard !Task.isCancelled, self?.closed == false else { return }
+                self?.status = L10n.format("草稿暂存失败：%@", error.localizedDescription)
+            }
         }
     }
 

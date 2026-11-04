@@ -302,6 +302,16 @@ import EasyMarkdownCore
             results.append("Native replace opens with the reader query, supports single/all/empty replacements and undo; search shortcuts route correctly in read/edit/split modes")
             try await localizationProbe(directory: output)
             results.append("Packaged app selects Simplified Chinese; native replace, file panels and unsaved close/quit prompts are Chinese with cancel/save/discard preserved")
+            try await defaultEditorProbe()
+            results.append("Default editor reads system state, scopes changes to the selected type, verifies results and handles failure without changing real associations in tests")
+            try await MemorySafetyCheck.run(directory: output)
+            results.append("Closed sessions release while reload/draft I/O is blocked; cancelled drafts stay discarded; small and large document undo histories evict old groups")
+            try await ConfigurationCheck.documents(directory: output)
+            results.append("YAML/TOML/INI/CONF/CFG/CNF/ENV/Properties/JSONC render safely as highlighted text, support search and split editing, and save comments, BOM and CRLF unchanged")
+            try await ConfigurationCheck.associations()
+            results.append("Configuration defaults are explicit and scoped to the selected format, with stable Finder types and extension aliases; dotenv variants do not claim .local files")
+            try await ConfigurationCheck.customExtensions(directory: output)
+            results.append("Every default-editor row reflects system state; custom extensions validate, deduplicate and persist, set only the selected type, and remove without changing defaults")
             let report = ["status": "passed", "checks": results] as [String: Any]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("report.json"))
@@ -599,6 +609,56 @@ import EasyMarkdownCore
         }
         @objc func controller(_ controller: NSDocumentController, didCloseAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
             result = didCloseAll
+        }
+    }
+
+    private static func defaultEditorProbe() async throws {
+        let application = URL(fileURLWithPath: "/Applications/EasyMarkdown.app")
+        let other = URL(fileURLWithPath: "/Applications/Other.app")
+        var defaults: [String: URL] = [:]
+        var requests: [String] = []
+        let model = DefaultEditorSettings(applicationURL: application,
+            query: { defaults[$0.identifier] ?? other },
+            set: { app, type in requests.append(type.identifier); defaults[type.identifier] = app }, canSet: { true })
+        guard requests.isEmpty, model.format == .markdown, !model.isDefault else {
+            throw Failure(message: "Default editor modified associations on initialization")
+        }
+        await model.makeDefault()
+        guard model.isDefault, model.errorMessage == nil, !model.isSetting,
+              requests == ["net.daringfireball.markdown"] else {
+            throw Failure(message: "Markdown default application was not scoped/verified")
+        }
+        model.format = .json
+        guard !model.isDefault, requests.count == 1 else { throw Failure(message: "Changing file type modified associations or retained stale status") }
+        await model.makeDefault()
+        guard requests == ["net.daringfireball.markdown", "public.json"], model.isDefault else {
+            throw Failure(message: "JSON selection changed the wrong default application")
+        }
+        model.format = .markdown
+        guard model.isDefault else { throw Failure(message: "Returning to Markdown did not query system state") }
+        defaults["net.daringfireball.markdown"] = other
+        model.refresh()
+        guard !model.isDefault else { throw Failure(message: "External default application change was not reflected") }
+        let failure = DefaultEditorSettings(applicationURL: application, query: { _ in other },
+            set: { _, _ in throw CocoaError(.userCancelled) }, canSet: { true })
+        await failure.makeDefault()
+        guard !failure.isSetting, !failure.isDefault, failure.errorMessage != nil else {
+            throw Failure(message: "Default editor cancellation claimed success or blocked retry")
+        }
+        let unchanged = DefaultEditorSettings(applicationURL: application, query: { _ in other },
+            set: { _, _ in }, canSet: { true })
+        await unchanged.makeDefault()
+        guard !unchanged.isDefault, unchanged.errorMessage != nil else { throw Failure(message: "Unconfirmed default application change claimed success") }
+        let unavailable = DefaultEditorSettings(applicationURL: application, query: { _ in nil },
+            set: { _, type in requests.append(type.identifier) }, canSet: { false })
+        let before = requests
+        await unavailable.makeDefault()
+        guard requests == before, unavailable.errorMessage != nil else { throw Failure(message: "Uninstalled/readonly application attempted to change defaults") }
+        guard let types = Bundle.main.object(forInfoDictionaryKey: "UTImportedTypeDeclarations") as? [[String: Any]],
+              let markdown = types.first(where: { $0["UTTypeIdentifier"] as? String == "net.daringfireball.markdown" }),
+              let tags = markdown["UTTypeTagSpecification"] as? [String: Any],
+              tags["public.filename-extension"] as? [String] == ["md", "markdown", "mdown", "mkd"] else {
+            throw Failure(message: "Markdown aliases are missing from the imported type declaration")
         }
     }
 

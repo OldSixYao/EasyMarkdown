@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
+import zlib
 #if !STANDALONE_CHECKS
 import XCTest
 @testable import EasyMarkdownCore
@@ -68,5 +69,63 @@ final class PreviewImageTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
         XCTAssertThrowsError(try PreviewImage.load(outside, within: allowed))
         XCTAssertThrowsError(try PreviewImage.load(link, within: allowed))
+    }
+
+    func testOversizedRasterHeadersAreRejectedWithoutDecoding() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("oversized.png")
+        // Encode a real 36 MP, 1-bit PNG without a 144 MB RGBA pixel buffer.
+        // Some ImageIO decoders only expose dimensions after validating IDAT.
+        let raw = Data(repeating: 0, count: (1 + 6000 / 8) * 6000)
+        var compressed = Data(count: Int(compressBound(uLong(raw.count))))
+        var length = uLongf(compressed.count)
+        let status = raw.withUnsafeBytes { input in
+            compressed.withUnsafeMutableBytes { output in
+                compress2(output.bindMemory(to: Bytef.self).baseAddress, &length,
+                    input.bindMemory(to: Bytef.self).baseAddress, uLong(raw.count), Z_BEST_SPEED)
+            }
+        }
+        XCTAssertEqual(status, Z_OK)
+        compressed.count = Int(length)
+        func bigEndian(_ value: UInt32) -> [UInt8] {
+            (0..<4).map { UInt8(truncatingIfNeeded: value >> ((3 - $0) * 8)) }
+        }
+        var data = Data([137, 80, 78, 71, 13, 10, 26, 10])
+        func chunk(_ kind: String, _ payload: Data) {
+            var body = Data(kind.utf8)
+            body.append(payload)
+            let crc = body.withUnsafeBytes { crc32(0, $0.bindMemory(to: Bytef.self).baseAddress, uInt(body.count)) }
+            data.append(contentsOf: bigEndian(UInt32(payload.count)))
+            data.append(body)
+            data.append(contentsOf: bigEndian(UInt32(crc)))
+        }
+        chunk("IHDR", Data(bigEndian(6000) + bigEndian(6000) + [1, 0, 0, 0, 0]))
+        chunk("IDAT", compressed)
+        chunk("IEND", Data())
+        try data.write(to: file)
+        let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)!
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)! as NSDictionary
+        XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, 6000)
+        do {
+            _ = try PreviewImage.load(file, within: root)
+            XCTFail("Oversized image passed its pixel budget")
+        } catch { XCTAssertEqual((error as NSError).code, CocoaError.fileReadTooLarge.rawValue) }
+    }
+
+    func testAnimationBudgetAndSVGPassThrough() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("long.gif")
+        try fixture(width: 2, height: 2, type: .gif, frames: PreviewImage.maximumFrames + 1).write(to: file)
+        XCTAssertThrowsError(try PreviewImage.load(file, within: root))
+        try fixture(width: 400, height: 400, type: .gif, frames: 201).write(to: file)
+        XCTAssertThrowsError(try PreviewImage.load(file, within: root))
+        let svg = root.appendingPathComponent("vector.svg")
+        let vector = Data("<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'><rect width='40' height='20' fill='blue'/></svg>".utf8)
+        try vector.write(to: svg)
+        XCTAssertEqual(try PreviewImage.load(svg, within: root).data, vector)
     }
 }

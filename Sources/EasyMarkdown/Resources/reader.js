@@ -251,7 +251,9 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
     pre.className = 'plain';
     const code = document.createElement('code');
     code.textContent = source;
-    if ((kind === 'json' || kind === 'xml') && source.length < 150000) code.className = 'language-' + kind;
+    const language = {json:'json', xml:'xml', yaml:'yaml', toml:'ini', ini:'ini',
+      configuration:'ini', environment:'ini', properties:'ini', jsonc:'json'}[kind];
+    if (language && source.length < 150000) code.className = 'language-' + language;
     pre.append(code); nextContent.append(pre);
     sourceBlocks.push({element:pre, start:0, end:source.length});
     changedElements = [pre];

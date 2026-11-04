@@ -21,16 +21,19 @@ actor DraftStore {
     }
 
     func load(_ url: URL) throws -> RecoveryDraft? {
+        try Task.checkCancellation()
         let file = try location(url)
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         return try JSONDecoder().decode(RecoveryDraft.self, from: Data(contentsOf: file))
     }
 
     func save(_ draft: RecoveryDraft, for url: URL) throws {
+        try Task.checkCancellation()
         try JSONEncoder().encode(draft).write(to: location(url), options: [.atomic, .completeFileProtectionUnlessOpen])
     }
 
     func remove(_ url: URL) throws {
+        try Task.checkCancellation()
         let file = try location(url)
         if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
     }

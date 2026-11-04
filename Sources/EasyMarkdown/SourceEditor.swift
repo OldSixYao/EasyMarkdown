@@ -239,6 +239,16 @@ struct SourceEditor: NSViewRepresentable {
             (#"\"[^\"]*\"|'[^']*'"#, .systemGreen),
             (#"<!--[\s\S]*?-->"#, .secondaryLabelColor)
         ])
+        private static let configurationRules = compile([
+            (#"(?m)^\s*(?:export[ \t]+)?[\w.\-]+(?=\s*[:=])"#, .systemBlue),
+            (#"(?m)^\s*\[[^\r\n]+\]"#, .systemBlue),
+            (#"\b(?:true|false|null|yes|no|on|off|\d+(?:\.\d+)?)\b"#, .systemPurple),
+            (#"\"(?:[^\"\\\r\n]|\\.)*\"|'[^'\r\n]*'"#, .systemGreen),
+            (#"(?m)^\s*[#;!][^\r\n]*$"#, .secondaryLabelColor)
+        ])
+        private static let jsoncRules = jsonRules + compile([
+            (#"(?m)^\s*//[^\r\n]*$|/\*[\s\S]*?\*/"#, .secondaryLabelColor)
+        ])
 
         func highlight() {
             guard let view = textView, !view.hasMarkedText(), let storage = view.textStorage,
@@ -254,12 +264,14 @@ struct SourceEditor: NSViewRepresentable {
             case .markdown: rules = Self.markdownRules
             case .json: rules = Self.jsonRules
             case .xml: rules = Self.xmlRules
+            case .yaml, .toml, .ini, .configuration, .environment, .properties: rules = Self.configurationRules
+            case .jsonc: rules = Self.jsoncRules
             case .text: return
             }
             var range = entire
-            if session.kind != .xml {
-                // XML comments may begin outside the viewport. Preserve its
-                // whole-document matching; Markdown/JSON rules are line-local.
+            if session.kind != .xml && session.kind != .jsonc {
+                // XML/JSONC block comments may begin outside the viewport.
+                // Other rules stay line-local around the visible text.
                 var visible = view.visibleRect.insetBy(dx: 0, dy: -250)
                 visible.origin.x -= view.textContainerInset.width
                 visible.origin.y -= view.textContainerInset.height

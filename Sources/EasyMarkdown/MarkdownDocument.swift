@@ -14,6 +14,14 @@ final class MarkdownDocument: NSDocument {
         fileType = "EasyMarkdown Document"
         session.document = self
         hasUndoManager = true
+        updateUndoLimit(forByteCount: snapshot.data.count)
+    }
+
+    func updateUndoLimit(forByteCount count: Int) {
+        // Estimate each undo group as a full-document replacement. This bounds
+        // history depth, not exact heap bytes; AppKit also retains redo data.
+        let levels = max(1, min(100, (32 * 1024 * 1024) / max(1, count)))
+        if undoManager?.levelsOfUndo != levels { undoManager?.levelsOfUndo = levels }
     }
 
     nonisolated override class var autosavesInPlace: Bool { false }
@@ -54,7 +62,7 @@ final class MarkdownDocument: NSDocument {
                 try await session.performSave(to: url, operation: saveOperation)
                 completionHandler(nil)
             } catch {
-                await session.reload(force: true)
+                await session.reload(force: true)?.value
                 completionHandler(error)
             }
         }

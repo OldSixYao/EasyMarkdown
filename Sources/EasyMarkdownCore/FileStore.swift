@@ -4,17 +4,24 @@ public actor FileStore {
     public init() {}
 
     public func read(_ url: URL) throws -> FileSnapshot {
-        try coordinatedRead(url)
+        try Task.checkCancellation()
+        return try coordinatedRead(url)
     }
 
     public func signature(_ url: URL) throws -> String {
+        try Task.checkCancellation()
         // URL resource values may be cached; poll fresh filesystem attributes instead.
         let values = try FileManager.default.attributesOfItem(atPath: url.path)
         return "\((values[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0):\(values[.size] ?? 0):\(values[.systemFileNumber] ?? 0)"
     }
 
+    public func isMissing(_ url: URL) -> Bool {
+        !FileManager.default.fileExists(atPath: url.path)
+    }
+
     public func save(_ text: String, to url: URL, baseline: FileSnapshot,
                      requireUnchanged: Bool) throws -> FileSnapshot {
+        try Task.checkCancellation()
         let snapshot = try baseline.replacingText(text)
         var coordinationError: NSError?
         var result: Result<Void, Error>?
@@ -42,6 +49,7 @@ public actor FileStore {
         var result: Result<FileSnapshot, Error>?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { target in
             result = Result {
+                try Task.checkCancellation()
                 let size = try target.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                 guard size <= FileSnapshot.maximumBytes else { throw DocumentError.tooLarge }
                 return try FileSnapshot(data: Data(contentsOf: target))

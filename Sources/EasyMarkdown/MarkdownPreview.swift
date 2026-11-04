@@ -38,6 +38,7 @@ final class LocalResourceHandler: NSObject, WKURLSchemeHandler {
         operation.addExecutionBlock { [weak self, weak operation] in
             guard operation?.isCancelled == false else { return }
             let result = autoreleasepool { Result { try PreviewImage.load(URL(fileURLWithPath: url.path), within: root) } }
+            guard operation?.isCancelled == false else { return }
             let delivered = DispatchSemaphore(value: 0)
             DispatchQueue.main.async { [weak self, weak operation] in
                 defer { delivered.signal() }

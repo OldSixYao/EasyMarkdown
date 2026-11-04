@@ -8,7 +8,6 @@
 "| 标题 1 | 标题 2 |" = "| Heading 1 | Heading 2 |";
 "上一个" = "Previous";
 "下一个" = "Next";
-"也可以将 Markdown、TXT、JSON 或 XML 拖到这里" = "You can also drop Markdown, TXT, JSON or XML files here";
 "代码" = "code";
 "代码块" = "Code Block";
 "任务列表" = "Task List";
@@ -147,3 +146,31 @@
 "隐藏 EasyMarkdown" = "Hide EasyMarkdown";
 "预览失败：%@" = "Preview failed: %@";
 "默认仅加载本地图片。开启后，会向图片所在的网站发送请求。" = "Only local images load by default. Enabling this sends requests to the websites hosting the images.";
+
+/* Default editor settings. */
+"默认编辑器" = "Default Editor";
+"文件类型" = "File Type";
+"设为默认" = "Make Default";
+"正在设置默认编辑器…" = "Setting default editor…";
+"EasyMarkdown 已是此类型的默认应用。" = "EasyMarkdown is the default app for this type.";
+"当前默认应用：%@" = "Current default app: %@";
+"此类型尚未设置默认应用。" = "No default app is set for this type.";
+"请将 EasyMarkdown 安装到 Applications，并运行应用后再设置默认编辑器。" = "Install EasyMarkdown in Applications and run the app before setting it as the default editor.";
+"系统尚未将此应用设为默认。请在 Finder 的“显示简介 → 打开方式”中选择 EasyMarkdown，再点击“全部更改”。" = "The system has not made this app the default. In Finder, choose Get Info → Open with → EasyMarkdown, then click Change All.";
+"无法设置默认编辑器：%@" = "Could not set the default editor: %@";
+"仅更改所选文件类型的默认打开应用。建议先将 EasyMarkdown 移到 Applications；macOS 可能要求确认。" = "Only the selected file type is affected. Move EasyMarkdown to Applications first. macOS may ask for confirmation.";
+
+"也可以拖入 Markdown、文本或 YAML、TOML 等配置文件" = "You can also drop Markdown, text, YAML, TOML and other configuration files here";
+"支持配置文件的原文查看与编辑。隐藏的 .env 文件可在打开面板中选择；.env.local 等无标准扩展名文件也可拖入打开。" = "View and edit configuration files as text. Hidden .env files appear in the Open dialog; files such as .env.local can also be dropped into the app.";
+"多个应用" = "Multiple applications";
+"已设为默认" = "Default";
+"部分已设为默认" = "Partly default";
+"其他应用" = "Other app";
+"未设置" = "Not set";
+"请输入单个后缀（如 log 或 .log），使用 1–32 个字母、数字、连字符、下划线或加号。" = "Enter one extension, such as log or .log, using 1–32 letters, digits, hyphens, underscores or plus signs.";
+"此后缀已在列表中，已选中对应类型。" = "This extension is already listed. Its file type is now selected.";
+"新后缀，例如 .log" = "New extension, e.g. .log";
+"添加" = "Add";
+"移除" = "Remove";
+"仅从列表移除，不恢复系统默认应用。" = "Remove from this list only. The system default app is unchanged.";
+"添加后缀只保存到列表，点击“设为默认”才修改系统关联。自定义类型按纯文本查看与编辑。" = "Adding an extension only saves it to this list. Click Make Default to change the system association. Custom types open as plain text.";

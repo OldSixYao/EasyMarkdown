@@ -58,16 +58,3 @@ public struct FileSnapshot: Equatable, Sendable {
         return try FileSnapshot(data: bytes)
     }
 }
-
-public enum DocumentKind: String, Sendable {
-    case markdown, text, json, xml
-
-    public init(url: URL?) {
-        switch url?.pathExtension.lowercased() {
-        case "md", "markdown", "mdown", "mkd": self = .markdown
-        case "json": self = .json
-        case "xml", "svg", "plist": self = .xml
-        default: self = .text
-        }
-    }
-}
