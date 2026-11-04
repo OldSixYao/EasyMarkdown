@@ -85,8 +85,6 @@ bash scripts/check-app.sh
 
 安装完整 Xcode 后，也可使用 `swift test` 运行 `Tests/EasyMarkdownCoreTests` 中相同的 25 个核心测试。仅安装 Command Line Tools 的环境可能不提供 XCTest。
 
-性能优化记录与复测方法见 [PERFORMANCE.md](PERFORMANCE.md)。详细验证记录见 [VALIDATION.md](../VALIDATION.md)。
-
 ## 当前限制
 
 - “同步”只覆盖已写入本机文件系统的变化；其他编辑器未保存的内容、云服务尚未下载的内容不可见。
@@ -108,7 +106,6 @@ Sources/EasyMarkdown/Resources/  离线渲染脚本与阅读样式
 Tests/                    核心回归测试
 scripts/                  构建和验证入口
 Examples/                 可直接打开的示例
-PLAN.md                   初版产品方案
 ```
 
 第三方资源：marked 15.0.12、DOMPurify 3.3.0、highlight.js 11.11.1。对应许可随资源一同打包。

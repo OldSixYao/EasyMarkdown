@@ -31,7 +31,7 @@
 
 - “关于 EasyMarkdown”增加应用图标、当前版本和构建号，以及可点击的 GitHub 仓库链接。
 - 精简 README，仅保留应用功能介绍和四组界面展示。
-- 版本记录集中到本文件，构建、使用和验证入口移至 [开发文档](docs/DEVELOPMENT.md)，历史性能记录移至 [性能文档](docs/PERFORMANCE.md)。
+- 版本记录集中到本文件，构建、使用和验证入口移至 [开发文档](docs/DEVELOPMENT.md)。
 
 ## 0.1.8
 
@@ -53,7 +53,6 @@
 - 复用未变化的预览内容块，减少 DOM 重建和重复代码高亮。
 - 缓存段落标识并使用二分滚动定位，源码颜色改用 TextKit 临时显示属性。
 - 本地图片后台限量读取，目录监听建立移到后台。
-- 完整实测及限制见 [性能文档](docs/PERFORMANCE.md)。
 
 ## 0.1.4
 
@@ -81,4 +80,4 @@
 - 支持 TXT、JSON、XML，以及基础格式化、查找、外观设置。
 - 初始迭代补齐启动窗口尺寸约束、Markdown 语法工具栏和基本回归验证。
 
-构建和使用方法见 [开发文档](docs/DEVELOPMENT.md)，详细验证历史见 [VALIDATION.md](VALIDATION.md)。
+构建和使用方法见 [开发文档](docs/DEVELOPMENT.md)。

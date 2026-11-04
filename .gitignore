@@ -2,3 +2,24 @@
 dist/
 .DS_Store
 .swiftpm/
+
+# Local agent instructions and development records
+/AGENTS.md
+/agent.md
+/.codex/
+/.agents/
+/PLAN.md
+/VALIDATION.md
+/docs/PERFORMANCE.md
+/Benchmarks/
+/plans/
+/tasks/
+/reports/
+/docs/plans/
+/docs/tasks/
+/docs/reports/
+**/[Pp][Ll][Aa][Nn]*.md
+**/[Tt][Aa][Ss][Kk]*.md
+**/[Tt][Oo][Dd][Oo]*.md
+**/[Vv][Aa][Ll][Ii][Dd][Aa][Tt][Ii][Oo][Nn]*.md
+**/[Tt][Ee][Ss][Tt]-[Rr][Ee][Pp][Oo][Rr][Tt]*.md
