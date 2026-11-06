@@ -40,10 +40,12 @@ struct SourceEditor: NSViewRepresentable {
         session.applyMarkdown = { [weak coordinator = context.coordinator] command in
             coordinator?.apply(command)
         }
-        session.replaceText = { [weak text] value in
-            guard let text else { return }
+        session.replaceText = { [weak text, weak coordinator = context.coordinator] value in
+            guard let text, let coordinator, text.delegate === coordinator,
+                  text.isEditable, !text.hasMarkedText() else { return }
             text.breakUndoCoalescing()
             text.insertText(value, replacementRange: NSRange(location: 0, length: (text.string as NSString).length))
+            text.breakUndoCoalescing()
             text.undoManager?.setActionName(L10n.text("格式化"))
         }
         session.editorFindAction = { [weak coordinator = context.coordinator] request in
@@ -88,6 +90,8 @@ struct SourceEditor: NSViewRepresentable {
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
         coordinator.highlightTask?.cancel()
         coordinator.highlightTask = nil
+        coordinator.scrollTask?.cancel()
+        coordinator.scrollTask = nil
         if let observer = coordinator.scrollObserver {
             NotificationCenter.default.removeObserver(observer)
             coordinator.scrollObserver = nil
@@ -103,6 +107,7 @@ struct SourceEditor: NSViewRepresentable {
         let session: DocumentSession
         weak var textView: NSTextView?
         var highlightTask: Task<Void, Never>?
+        var scrollTask: Task<Void, Never>?
         var scrollObserver: NSObjectProtocol?
         var synchronizedY: CGFloat?
         var updatingText = false
@@ -143,13 +148,19 @@ struct SourceEditor: NSViewRepresentable {
         func scrollPosition() -> SplitScrollPosition? {
             guard let textView, let scroll = textView.enclosingScrollView,
                   let layout = textView.layoutManager, let container = textView.textContainer else { return nil }
-            layout.ensureLayout(for: container)
             let top = scroll.contentView.bounds.minY
+            let point = NSPoint(x: 0, y: max(0, top - textView.textContainerInset.height))
+            // Only lay out through the visible line, not the entire document.
+            // numberOfGlyphs would also force glyph generation for the whole text.
+            let visible = NSRect(origin: point, size: NSSize(width: container.containerSize.width, height: 1))
+            layout.ensureLayout(forBoundingRect: visible, in: container)
+            let visibleGlyphs = layout.glyphRange(forBoundingRectWithoutAdditionalLayout: visible, in: container)
             let maximum = max(0, textView.bounds.height - scroll.contentView.bounds.height)
             let progress = maximum > 0 ? min(1, max(0, top / maximum)) : 0
-            guard layout.numberOfGlyphs > 0 else { return SplitScrollPosition(offset: 0, progress: progress) }
-            let glyph = min(layout.numberOfGlyphs - 1, layout.glyphIndex(for:
-                NSPoint(x: 0, y: max(0, top - textView.textContainerInset.height)), in: container))
+            guard visibleGlyphs.length > 0 else {
+                return SplitScrollPosition(offset: Double(textView.textStorage?.length ?? 0), progress: progress)
+            }
+            let glyph = min(NSMaxRange(visibleGlyphs) - 1, layout.glyphIndex(for: point, in: container))
             var glyphRange = NSRange()
             let rect = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &glyphRange)
             let characters = layout.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
@@ -166,21 +177,30 @@ struct SourceEditor: NSViewRepresentable {
             // A matching bounds notification acknowledges a synchronized move.
             if let synchronizedY, abs(top - synchronizedY) < 1 { return }
             synchronizedY = nil
-            if let position = scrollPosition() { session.editorDidScroll(position) }
+            guard scrollTask == nil else { return }
+            scrollTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(16))
+                guard !Task.isCancelled, let self else { return }
+                self.scrollTask = nil
+                guard self.session.mode == .split, self.session.synchronizeSplitScroll,
+                      !self.updatingText, self.synchronizedY == nil,
+                      let view = self.textView, view.string == self.session.state.text,
+                      let position = self.scrollPosition() else { return }
+                self.session.editorDidScroll(position)
+            }
         }
 
         private func scroll(to position: SplitScrollPosition) {
             guard let textView, let scroll = textView.enclosingScrollView,
-                  let layout = textView.layoutManager, let container = textView.textContainer,
+                  let layout = textView.layoutManager,
                   !textView.hasMarkedText() else { return }
-            layout.ensureLayout(for: container)
-            let length = (textView.string as NSString).length
-            let maximum = max(0, textView.bounds.height - scroll.contentView.bounds.height)
+            let length = textView.textStorage?.length ?? 0
             var y: CGFloat
             if position.progress <= 0.0001 { y = 0 }
-            else if position.progress >= 0.9999 { y = maximum }
             else if length > 0 {
-                let offset = min(Double(length - 1), position.offset)
+                let offset = position.progress >= 0.9999 ? Double(length - 1) :
+                    min(Double(length - 1), max(0, position.offset))
+                layout.ensureLayout(forCharacterRange: NSRange(location: Int(offset), length: 1))
                 let glyph = layout.glyphIndexForCharacter(at: Int(offset))
                 var glyphRange = NSRange()
                 let rect = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &glyphRange)
@@ -188,6 +208,8 @@ struct SourceEditor: NSViewRepresentable {
                 let fraction = (offset - Double(characters.location)) / Double(max(1, characters.length))
                 y = textView.textContainerInset.height + rect.minY + rect.height * min(1, max(0, fraction))
             } else { y = 0 }
+            let maximum = max(0, textView.bounds.height - scroll.contentView.bounds.height)
+            if position.progress >= 0.9999 { y = maximum }
             y = min(maximum, max(0, y))
             synchronizedY = y
             scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: y))
@@ -227,8 +249,7 @@ struct SourceEditor: NSViewRepresentable {
         }
         private static let markdownRules = compile([
             (#"(?m)^#{1,6}\s.+$"#, .systemBlue),
-            (#"`[^`\n]+`"#, .systemOrange),
-            (#"\[[^\]]+\]\([^\)]+\)"#, .systemTeal)
+            (#"`[^`\n]+`"#, .systemOrange)
         ])
         private static let jsonRules = compile([
             (#"\"(?:[^\"\\]|\\.)*\""#, .systemGreen),
@@ -281,10 +302,25 @@ struct SourceEditor: NSViewRepresentable {
                     range = (source as NSString).lineRange(for: NSIntersectionRange(characters, entire))
                 }
             }
+            // Expanding a wrapped visible line must not turn highlighting into
+            // an unbounded scan. Long logical lines keep the default text color.
+            let ranges = SourceHighlighting.boundedLineRanges(in: source as NSString, range: range)
+            let deadline = ProcessInfo.processInfo.systemUptime + 0.008
             for (expression, color) in rules {
-                expression.enumerateMatches(in: source, range: range) { match, _, _ in
-                    if let match {
-                        layout.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: match.range)
+                for range in ranges {
+                    guard ProcessInfo.processInfo.systemUptime < deadline else { return }
+                    expression.enumerateMatches(in: source, options: [.reportProgress], range: range) { match, _, stop in
+                        if ProcessInfo.processInfo.systemUptime >= deadline { stop.pointee = true; return }
+                        if let match {
+                            layout.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: match.range)
+                        }
+                    }
+                }
+            }
+            if session.kind == .markdown {
+                for range in ranges {
+                    for match in SourceHighlighting.markdownLinks(in: source as NSString, range: range) {
+                        layout.addTemporaryAttribute(.foregroundColor, value: NSColor.systemTeal, forCharacterRange: match)
                     }
                 }
             }

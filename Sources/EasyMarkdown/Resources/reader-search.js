@@ -1,5 +1,10 @@
 /* One rendered-text index drives both the result count and navigation. */
 let readerSearch = {query:'', generation:-1, request:0, offset:0, groups:[], count:0, index:-1, range:null, selection:false};
+let readerSearchIndex = null;
+
+function invalidateReaderSearchIndex() {
+  readerSearchIndex = null;
+}
 
 function clearReaderSearchHighlight() {
   globalThis.CSS?.highlights?.delete('reader-search-current');
@@ -11,7 +16,8 @@ function clearReaderSearchHighlight() {
   readerSearch.selection = false;
 }
 
-function invalidateReaderSearch() {
+function invalidateReaderSearch(resetIndex = true) {
+  if (resetIndex) invalidateReaderSearchIndex();
   clearReaderSearchHighlight();
   readerSearch.generation = -1;
   readerSearch.groups = [];
@@ -80,28 +86,33 @@ function readerSearchRange(index) {
 }
 
 window.updateReaderSearch = function(query, backwards, request, offset) {
-  const rebuild = query !== readerSearch.query || renderGeneration !== readerSearch.generation;
+  const sameContent = query === readerSearch.query && renderGeneration === readerSearch.generation;
+  const previousIndex = readerSearch.index;
+  const movement = request === readerSearch.request ? 0 : offset === undefined ?
+    (backwards ? -1 : 1) * (request - readerSearch.request) : offset - readerSearch.offset;
+  const rebuild = !sameContent || (query && readerSearchIndex === null);
   if (rebuild) {
-    invalidateReaderSearch();
+    // Query changes reuse the immutable visible-text index. Closing search
+    // releases it; document updates and layout/visibility changes invalidate it.
+    invalidateReaderSearch(!query);
     readerSearch.query = query;
     readerSearch.generation = renderGeneration;
     if (query) {
       // Escape regex syntax: the public search is always a literal search.
       const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
-      for (const group of searchableGroups()) {
-        group.matches = [];
-        group.first = readerSearch.count;
-        for (const match of group.text.matchAll(pattern)) group.matches.push(match.index, match.index + match[0].length);
-        if (!group.matches.length) continue;
-        readerSearch.count += group.matches.length / 2;
-        delete group.text;
-        readerSearch.groups.push(group);
+      readerSearchIndex ??= searchableGroups();
+      for (const group of readerSearchIndex) {
+        const matches = [];
+        for (const match of group.text.matchAll(pattern)) matches.push(match.index, match.index + match[0].length);
+        if (!matches.length) continue;
+        readerSearch.groups.push({spans:group.spans, matches, first:readerSearch.count});
+        readerSearch.count += matches.length / 2;
       }
-      readerSearch.index = readerSearch.count ? 0 : -1;
+      readerSearch.index = readerSearch.count ? (sameContent ?
+        ((Math.max(0, previousIndex) + movement) % readerSearch.count + readerSearch.count) % readerSearch.count : 0) : -1;
     }
   } else if (readerSearch.count && request !== readerSearch.request) {
     // SwiftUI can coalesce several key presses; retain their net movement.
-    const movement = offset === undefined ? (backwards ? -1 : 1) * (request - readerSearch.request) : offset - readerSearch.offset;
     readerSearch.index = ((readerSearch.index + movement) % readerSearch.count + readerSearch.count) % readerSearch.count;
   }
   readerSearch.request = request;

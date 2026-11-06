@@ -40,6 +40,7 @@ final class DocumentSession {
     var errorMessage: String?
     var recovery: RecoveryDraft?
     var isSaving = false
+    var isFormatting = false
     var saveFailure: String?
     var saveStateLabel: String {
         if isSaving { return L10n.text("正在保存…") }
@@ -55,6 +56,8 @@ final class DocumentSession {
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var draftTask: Task<Void, Never>?
     @ObservationIgnored private var statusTask: Task<Void, Never>?
+    @ObservationIgnored private var formatTask: Task<Void, Never>?
+    @ObservationIgnored private var formatGeneration = 0
     @ObservationIgnored private var directorySource: DispatchSourceFileSystemObject?
     @ObservationIgnored private var watchTask: Task<Void, Never>?
     @ObservationIgnored private var lastSignature: String?
@@ -150,6 +153,7 @@ final class DocumentSession {
 
     func stop(discardDraft: Bool) {
         closed = true
+        cancelFormatting()
         pollTask?.cancel(); reloadTask?.cancel(); loadTask?.cancel(); draftTask?.cancel(); statusTask?.cancel(); watchTask?.cancel()
         pollTask = nil; reloadTask = nil; draftTask = nil; statusTask = nil
         loadTask = nil
@@ -217,7 +221,9 @@ final class DocumentSession {
                 guard !Task.isCancelled, let self, !self.closed, self.url == url,
                       !self.isSaving, generation == self.reloadGeneration else { return }
                 let changed = snapshot.data != self.state.baseline.data
+                let oldText = self.state.text
                 self.state.receive(snapshot)
+                if oldText != self.state.text { self.cancelFormatting() }
                 self.lastSignature = signature
                 self.synchronizeDirtyState()
                 if changed && !self.state.hasConflict { self.flash(L10n.text("已加载最新内容")) }
@@ -235,6 +241,7 @@ final class DocumentSession {
     }
 
     func edit(_ text: String) {
+        cancelFormatting()
         state.text = text
         synchronizeDirtyState()
         scheduleDraft()
@@ -267,6 +274,7 @@ final class DocumentSession {
 
     func restoreDraft() {
         guard let recovery else { return }
+        cancelFormatting()
         let current = state.baseline
         do {
             state = DocumentState(snapshot: try FileSnapshot(data: recovery.baseline))
@@ -290,6 +298,7 @@ final class DocumentSession {
         alert.informativeText = L10n.text("本地尚未保存的修改将被放弃。你也可以先将本地内容另存为。")
         alert.addButton(withTitle: L10n.text("加载外部版本")); alert.addButton(withTitle: L10n.text("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        cancelFormatting()
         state.acceptExternal()
         document?.undoManager?.removeAllActions()
         synchronizeDirtyState(); scheduleDraft()
@@ -306,6 +315,7 @@ final class DocumentSession {
 
     func performSave(to target: URL, operation: NSDocument.SaveOperationType) async throws {
         guard !isSaving else { throw CocoaError(.userCancelled) }
+        cancelFormatting()
         isSaving = true
         defer { isSaving = false }
         let originalURL = url
@@ -334,13 +344,41 @@ final class DocumentSession {
 
     func saveAs() { document?.saveAs(nil) }
 
-    func format() {
-        guard !isSaving else { return }
-        do {
-            let formatted = try DocumentFormatter.format(state.text, kind: kind)
-            // Formatting is available while the editor is mounted and uses native undo.
-            replaceText?(formatted)
-        } catch { errorMessage = error.localizedDescription }
+    private func cancelFormatting() {
+        formatTask?.cancel()
+        formatTask = nil
+        formatGeneration += 1
+        isFormatting = false
+    }
+
+    @discardableResult
+    func format() -> Task<Void, Never>? {
+        guard !closed, !isSaving, !isFormatting, mode != .read, replaceText != nil,
+              kind == .json || kind == .xml else { return nil }
+        let text = state.text, kind = kind, url = url
+        let generation = formatGeneration
+        isFormatting = true
+        formatTask = Task { [weak self] in
+            do {
+                let formatted = try await DocumentFormattingService.shared.format(text, kind: kind)
+                guard !Task.isCancelled, let self, !self.closed,
+                      self.formatGeneration == generation else { return }
+                self.formatTask = nil
+                self.isFormatting = false
+                guard !self.isSaving, self.mode != .read, self.url == url,
+                      self.state.text == text, formatted != text else { return }
+                // Apply through the editor only after validating the captured
+                // revision. Native undo and input-method composition stay intact.
+                self.replaceText?(formatted)
+            } catch {
+                guard !Task.isCancelled, let self, !self.closed,
+                      self.formatGeneration == generation else { return }
+                self.formatTask = nil
+                self.isFormatting = false
+                self.errorMessage = error.localizedDescription
+            }
+        }
+        return formatTask
     }
 
     func flash(_ message: String) {

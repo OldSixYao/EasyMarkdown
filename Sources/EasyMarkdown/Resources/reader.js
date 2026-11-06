@@ -301,11 +301,13 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
     }
   }
   const ids = new Set();
+  const nextSuffix = new Map();
   const headings = [...content.querySelectorAll('h1,h2,h3,h4,h5,h6')].map(el => {
     const title = el.textContent.trim();
     let slug = title.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu,'').replace(/\s+/g,'-') || 'section';
-    const base = slug; let n = 1;
+    const base = slug; let n = nextSuffix.get(base) || 1;
     while (ids.has(slug)) slug = base + '-' + n++;
+    nextSuffix.set(base, n);
     ids.add(slug); if (el.id !== slug) el.id = slug;
     return {id:slug, title, level:Number(el.tagName.slice(1))};
   });
@@ -391,7 +393,10 @@ addEventListener('scroll', () => {
     }
   }, 16);
 }, {passive:true});
-addEventListener('resize', () => { if (!restoring) updateActiveHeading(); }, {passive:true});
+addEventListener('resize', () => {
+  invalidateReaderSearchIndex();
+  if (!restoring) updateActiveHeading();
+}, {passive:true});
 
 content.addEventListener('click', event => {
   const button = event.target.closest('button');
@@ -415,4 +420,5 @@ content.addEventListener('click', event => {
     try { document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView(); } catch {}
   } else { send('link', href); }
 });
+content.addEventListener('toggle', invalidateReaderSearchIndex, true);
 send('ready', true);

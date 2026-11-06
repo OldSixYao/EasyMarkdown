@@ -95,8 +95,9 @@ struct DocumentView: View {
                     .accessibilityValue(session.synchronizeSplitScroll ? L10n.text("开启") : L10n.text("关闭"))
                 }
                 if session.kind == .json || session.kind == .xml {
-                    Button(L10n.text("格式化")) { session.format() }.disabled(session.isSaving)
+                    Button(L10n.text("格式化")) { session.format() }.disabled(session.isSaving || session.isFormatting)
                         .toolbarHoverFeedback(L10n.text("格式化文档"))
+                    if session.isFormatting { ProgressView().controlSize(.small) }
                 }
             }
             Button {

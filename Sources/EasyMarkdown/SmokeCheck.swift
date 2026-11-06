@@ -12,7 +12,11 @@ import EasyMarkdownCore
 
     static func run() async {
         let output = URL(fileURLWithPath: CommandLine.arguments.last ?? "/tmp/easymarkdown-smoke")
-        var results: [String] = []
+        var results: [String] = [] {
+            didSet {
+                if let last = results.last { FileHandle.standardError.write(Data(("CHECK: " + last + "\n").utf8)) }
+            }
+        }
         var document: MarkdownDocument?
         do {
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -169,9 +173,17 @@ import EasyMarkdownCore
             try await eventually { ((try? await splitReader.evaluateJavaScript("scrollY")) as? Double ?? -1) < 1 }
             guard editor.window?.firstResponder === editor else { throw Failure(message: "Scroll synchronization stole editor focus") }
             results.append("Split scrolling works in both directions by source block, reaches top/bottom, avoids feedback and can be disabled")
-            // Real toolbar clicks and Cmd-Z arrive in separate event-loop turns.
-            // Let AppKit finish the previous event's undo group before this action.
-            try await Task.sleep(for: .milliseconds(50))
+            // These programmatic actions do not generate AppKit input events.
+            // Wake the application event loop so AppKit can close its own undo
+            // group before the next simulated toolbar click.
+            if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero,
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0) {
+                NSApp.postEvent(event, atStart: false)
+            }
+            try await eventually(description: "previous editing event closes its undo group") {
+                editor.undoManager?.groupingLevel == 0
+            }
             let beforeFormatting = doc.session.state.text
             let selection = (editor.string as NSString).range(of: "Local edit")
             editor.setSelectedRange(selection)
@@ -304,6 +316,8 @@ import EasyMarkdownCore
             results.append("Packaged app selects Simplified Chinese; native replace, file panels and unsaved close/quit prompts are Chinese with cancel/save/discard preserved")
             try await defaultEditorProbe()
             results.append("Default editor reads system state, scopes changes to the selected type, verifies results and handles failure without changing real associations in tests")
+            try await PerformanceSafetyCheck.run(directory: output)
+            results.append("Bounded highlighting/layout, asynchronous formatting undo/cancellation, duplicate headings and reusable search indexes pass")
             try await MemorySafetyCheck.run(directory: output)
             results.append("Closed sessions release while reload/draft I/O is blocked; cancelled drafts stay discarded; small and large document undo histories evict old groups")
             try await ConfigurationCheck.documents(directory: output)
@@ -403,16 +417,21 @@ import EasyMarkdownCore
               replace.keyEquivalentModifierMask == [.command, .option] else {
             throw Failure(message: "Find menu commands or key equivalents missing")
         }
-        func invoke(_ item: NSMenuItem) throws {
+        func invoke(_ item: NSMenuItem) async throws {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            try await eventually(description: "search document becomes the native menu target") {
+                NSApp.keyWindow === window && NSDocumentController.shared.currentDocument === doc
+            }
             guard let action = item.action, NSApp.sendAction(action, to: item.target, from: item) else {
                 throw Failure(message: "Find menu action was not delivered: \(item.title)")
             }
         }
-        try invoke(previous)
+        try await invoke(previous)
         try await eventually(description: "previous wraps to last match") {
             (try? await reader.evaluateJavaScript("readerSearch.index")) as? Int == 4
         }
-        try invoke(next)
+        try await invoke(next)
         try await eventually(description: "next wraps to first match") {
             (try? await reader.evaluateJavaScript("readerSearch.index")) as? Int == 0
         }
@@ -491,7 +510,7 @@ import EasyMarkdownCore
             try await ScreenshotCapture.capture(window, to: directory.appendingPathComponent("search-\(name).png"))
         }
         let clipboardChange = NSPasteboard.general.changeCount
-        try invoke(replace)
+        try await invoke(replace)
         var editor: NSTextView?
         try await eventually(description: "native replace bar opens after editor mounts") {
             editor = descendants(root).compactMap { $0 as? NSTextView }.first { $0.delegate is SourceEditor.Coordinator }
@@ -528,13 +547,20 @@ import EasyMarkdownCore
             window.makeFirstResponder(editor)
         }
         try setField(replacementField, value: "替换<&>")
+        // Committing the field editor posts native find-bar notifications.
+        // Deliver them before issuing the next simulated menu action.
+        try await Task.sleep(for: .milliseconds(100))
         editor.setSelectedRange(NSRange(location: 0, length: 0))
-        try invoke(next)
-        try await eventually(description: "native next selects source match") { editor.selectedRange().length == 5 }
+        try await invoke(next)
+        do {
+            try await eventually(description: "native next selects source match") { editor.selectedRange().length == 5 }
+        } catch {
+            throw Failure(message: "Native next failed: range=\(editor.selectedRange()) query=\(findField.stringValue) replacement=\(replacementField.stringValue) request=\(doc.session.findRequest) pending=\(String(describing: doc.session.pendingEditorFind?.action.rawValue)) currentDocument=\(NSDocumentController.shared.currentDocument === doc) keyWindow=\(NSApp.keyWindow === window)")
+        }
         let first = editor.selectedRange()
-        try invoke(next)
+        try await invoke(next)
         try await eventually { editor.selectedRange().location > first.location }
-        try invoke(previous)
+        try await invoke(previous)
         try await eventually { editor.selectedRange() == first }
         try await Task.sleep(for: .milliseconds(50))
         doc.session.requestEditorFind(.replace)
@@ -575,12 +601,12 @@ import EasyMarkdownCore
         try setField(findField, value: "alpha")
         doc.session.mode = .split
         editor.setSelectedRange(NSRange(location: 0, length: 0))
-        try invoke(next)
+        try await invoke(next)
         try await eventually(description: "split next targets native editor") { editor.selectedRange().length == 5 }
         let splitFirst = editor.selectedRange()
-        try invoke(next)
+        try await invoke(next)
         try await eventually { editor.selectedRange().location > splitFirst.location }
-        try invoke(previous)
+        try await invoke(previous)
         try await eventually { editor.selectedRange() == splitFirst }
         try setField(replacementField, value: "分栏替换")
         try await Task.sleep(for: .milliseconds(50))
