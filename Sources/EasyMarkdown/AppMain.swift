@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var opening: Set<URL> = []
     private let store = FileStore()
     private var recentMenu: NSMenu!
+    let updates = UpdateController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let icon = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") {
@@ -40,6 +41,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if Bundle.main.object(forInfoDictionaryKey: "EasyMarkdownUpdateFixture") as? Bool == true,
+           let path = Bundle.main.object(forInfoDictionaryKey: "EasyMarkdownUpdateReportPath") as? String {
+            Task { await UpdateCheck.run(output: URL(fileURLWithPath: path)) }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--update-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await UpdateCheck.run(output: output) }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--configuration-test"),
            CommandLine.arguments.indices.contains(index + 1) {
             let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
@@ -63,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #endif
+        updates.start()
         if NSDocumentController.shared.documents.isEmpty && opening.isEmpty { showWelcome(nil) }
         for argument in CommandLine.arguments.dropFirst() where !argument.hasPrefix("-") {
             open(URL(fileURLWithPath: argument))
@@ -150,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 300),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = L10n.text("设置")
-        let hosting = NSHostingController(rootView: SettingsView())
+        let hosting = NSHostingController(rootView: SettingsView(updates: updates))
         hosting.sizingOptions = []
         window.contentViewController = hosting
         window.setContentSize(NSSize(width: 560, height: 650))
@@ -210,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let app = submenu("EasyMarkdown")
         item(app, L10n.text("关于 EasyMarkdown"), #selector(showAbout(_:)), "", self)
+        item(app, L10n.text("检查更新…"), #selector(UpdateController.checkForUpdates(_:)), "", updates)
         app.addItem(.separator())
         item(app, L10n.text("设置…"), #selector(showSettings(_:)), ",", self)
         app.addItem(.separator())
@@ -290,6 +304,7 @@ private struct WelcomeView: View {
 private typealias SettingsState<Value> = State<Value>
 
 private struct SettingsView: View {
+    @ObservedObject var updates: UpdateController
     @SettingsState private var defaultEditor = DefaultEditorSettings()
     @AppStorage(AppLanguage.preferenceKey) private var language = "system"
     @AppStorage("readerFontSize") var fontSize = 16.0
@@ -300,6 +315,7 @@ private struct SettingsView: View {
 
     var body: some View {
         Form {
+            SoftwareUpdateSection(updates: updates)
             Picker(L10n.text("应用语言"), selection: Binding(
                 get: { AppLanguage(rawValue: language)?.rawValue ?? "system" },
                 set: { value in AppLanguage.select(AppLanguage(rawValue: value) ?? .system) }

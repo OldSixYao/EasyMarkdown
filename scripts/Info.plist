@@ -9,9 +9,19 @@
   <key>CFBundleExecutable</key><string>EasyMarkdown</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.1.23</string>
-  <key>CFBundleVersion</key><string>24</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>CFBundleShortVersionString</key><string>0.1.24</string>
+  <key>CFBundleVersion</key><string>25</string>
+  <key>SUPublicEDKey</key><string>xyWDgXxubU9w2tFFLz6F0yKt1pXXlN2zHvq9gFHIuRM=</string>
+  <key>SUFeedURL</key><string>https://raw.githubusercontent.com/OldSixYao/EasyMarkdown/main/updates/appcast.xml</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>SUAutomaticallyUpdate</key><false/>
+  <key>SUAllowsAutomaticUpdates</key><false/>
+  <key>SUEnableSystemProfiling</key><false/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>SURequireSignedFeed</key><true/>
+  <key>SUSignedFeedFailureExpirationInterval</key><integer>0</integer>
+  <key>LSMinimumSystemVersion</key><string>14.0.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHumanReadableCopyright</key><string>EasyMarkdown</string>

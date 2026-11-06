@@ -23,6 +23,13 @@ import EasyMarkdownCore
             }
             let sample = expected == "en" ? "Settings" : expected == "zh-Hant" ? "設定" : "设置"
             guard L10n.text("设置") == sample else { throw SmokeCheck.Failure(message: "Application strings do not match native language") }
+            let updateTitle = expected == "en" ? "Check for Updates…" : expected == "zh-Hant" ? "檢查更新…" : "检查更新…"
+            guard let application = NSApp.delegate as? AppDelegate,
+                  let updateItem = NSApp.mainMenu?.items.first?.submenu?.items.first(where: { $0.title == updateTitle }),
+                  updateItem.target === application.updates,
+                  L10n.text("软件更新") == (expected == "en" ? "Software Update" : expected == "zh-Hant" ? "軟體更新" : "软件更新") else {
+                throw SmokeCheck.Failure(message: "Update menu localization or shared updater target failed")
+            }
             guard AppLanguage.allCases.map(\.rawValue) == ["system", "zh-Hans", "zh-Hant", "en"] else {
                 throw SmokeCheck.Failure(message: "Wrong language choices")
             }

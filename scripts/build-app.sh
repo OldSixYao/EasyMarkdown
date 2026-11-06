@@ -9,14 +9,18 @@ fi
 swift build -c "$configuration"
 binary_dir="$(swift build -c "$configuration" --show-bin-path)"
 app_dir="$PWD/dist/EasyMarkdown.app"
-mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$app_dir/Contents/Frameworks"
 cp "$binary_dir/EasyMarkdown" "$app_dir/Contents/MacOS/"
-cp -R "$binary_dir/EasyMarkdown_EasyMarkdown.bundle" "$app_dir/Contents/Resources/"
+ditto "$binary_dir/EasyMarkdown_EasyMarkdown.bundle" "$app_dir/Contents/Resources/EasyMarkdown_EasyMarkdown.bundle"
+ditto .build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework \
+  "$app_dir/Contents/Frameworks/Sparkle.framework"
 for language in zh-Hans zh-Hant en; do
   mkdir -p "$app_dir/Contents/Resources/$language.lproj"
   cp Sources/EasyMarkdown/Resources/"$language.lproj/"*.strings "$app_dir/Contents/Resources/$language.lproj/"
 done
 cp scripts/Info.plist "$app_dir/Contents/Info.plist"
 cp Assets/AppIcon.icns "$app_dir/Contents/Resources/"
-codesign --force --deep --sign - "$app_dir"
+# Preserve Sparkle's upstream signatures, including its nested helpers.
+codesign --force --sign - "$app_dir"
+codesign --verify --deep --strict "$app_dir"
 echo "$app_dir"

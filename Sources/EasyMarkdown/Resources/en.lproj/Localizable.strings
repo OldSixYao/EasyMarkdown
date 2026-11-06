@@ -174,3 +174,14 @@
 "移除" = "Remove";
 "仅从列表移除，不恢复系统默认应用。" = "Remove from this list only. The system default app is unchanged.";
 "添加后缀只保存到列表，点击“设为默认”才修改系统关联。自定义类型按纯文本查看与编辑。" = "Adding an extension only saves it to this list. Click Make Default to change the system association. Custom types open as plain text.";
+
+"检查更新…" = "Check for Updates…";
+"检查更新" = "Check for Updates";
+"软件更新" = "Software Update";
+"每天自动检查更新" = "Check for updates daily";
+"发现新版本时提示，下载和安装前由你确认。" = "Notify me when an update is available. Ask before downloading and installing.";
+"版本 %@（构建号 %@）" = "Version %@ (build %@)";
+"上次检查：%@" = "Last checked: %@";
+"无法启动更新检查：%@" = "Unable to start the updater: %@";
+"请使用完整的 EasyMarkdown 应用包检查更新。" = "Please use the complete EasyMarkdown application bundle to check for updates.";
+"请先将 EasyMarkdown 拖入“应用程序”，退出后从“应用程序”重新打开，再检查更新。" = "Drag EasyMarkdown into Applications, quit, and reopen it from Applications before checking for updates.";
