@@ -1,0 +1,21 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>EasyMarkdown</title>
+        <item>
+            <title>0.1.24</title>
+            <pubDate>Fri, 06 Nov 2026 11:20:08 +0800</pubDate>
+            <link>https://github.com/OldSixYao/EasyMarkdown</link>
+            <sparkle:version>25</sparkle:version>
+            <sparkle:shortVersionString>0.1.24</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<ul><li>应用菜单和设置新增“检查更新…”，支持查看更新说明、确认下载、安装和重新启动，共用同一更新状态。</li><li>默认每天自动检查一次，可在设置中关闭；下载和安装由用户确认，安装退出保留未保存文档的保存、放弃和取消流程。</li><li>接入 Sparkle 2.10.1，更新源和安装包使用独立密钥签名，解压前验证；只读磁盘映像和裸可执行文件显示安装说明。</li><li>增加可重复使用的磁盘映像打包、更新源签名及隔离升级验证流程，提供简体中文、繁体中文和英文更新入口。</li></ul>]]></description>
+            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.24/EasyMarkdown-0.1.24-arm64.dmg" length="2717602" type="application/octet-stream" sparkle:edSignature="Mmd9DBYNKaWIJU1BUHNXGsKRGltIJkd/1klnHBrbsM7y9P3QO2zRUiM1ZNYEYsBkdZm9k86HpClfBjVRyAYPBg=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: OdX+u6n9jN/OvRmk8O45wv6MRIFj/PR6KUEYecS2CgQh0WKy0gNAM5eScm/1bqSdqFhyiiayCDVnwVA8Nz+sDA==
+length: 1910
+-->
