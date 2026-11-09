@@ -4,6 +4,7 @@ import base64
 import functools
 import http.server
 import json
+import os
 import plistlib
 import shutil
 import tempfile
@@ -19,8 +20,10 @@ TOOLS = ROOT / ".build/artifacts/sparkle/Sparkle/bin"
 ACCOUNT = "app.easymarkdown.mac.updates"
 OUTPUT = Path(tempfile.mkdtemp(prefix="easymarkdown-updates-"))
 REPORT = ROOT / ".build/updates" / OUTPUT.name
+SOURCE_APP = OUTPUT / f"EasyMarkdownUpdateCheck-{uuid.uuid4().hex}.app"
 NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", NS)
+LSREGISTER = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 
 
 def run(*args, **kwargs):
@@ -35,12 +38,42 @@ def configure(app, changes):
     plist = app / "Contents/Info.plist"
     data = plistlib.loads(plist.read_bytes())
     data.update(changes)
+    # Test bundles must never compete with the real app by name or document type.
+    if data.get("EasyMarkdownUpdateFixture") is True:
+        fixture_name = app.stem
+        if not fixture_name.startswith("EasyMarkdownUpdateCheck-"):
+            raise RuntimeError("测试应用必须使用独立名称")
+        data["CFBundleName"] = fixture_name
+        data["CFBundleDisplayName"] = fixture_name
+        for key in ("CFBundleDocumentTypes", "UTExportedTypeDeclarations", "UTImportedTypeDeclarations"):
+            data.pop(key, None)
+        for localized in (app / "Contents/Resources").glob("*.lproj/InfoPlist.strings"):
+            localized.write_text(f'"CFBundleDisplayName" = "{fixture_name}";\n')
     plist.write_bytes(plistlib.dumps(data))
     run("codesign", "--force", "--sign", "-", app, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def retire_fixtures():
+    identifiers = set()
+    for app in OUTPUT.rglob("EasyMarkdownUpdateCheck-*.app"):
+        data = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+        identifier = data.get("CFBundleIdentifier", "")
+        if data.get("EasyMarkdownUpdateFixture") is not True or not identifier.startswith("app.easymarkdown.updatecheck."):
+            raise RuntimeError("拒绝清理未标记的应用")
+        identifiers.add(identifier)
+        subprocess.run([str(LSREGISTER), "-u", str(app)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Keep diagnostic contents, but remove the application suffix so later
+        # filesystem scans cannot register these disposable bundles again.
+        app.rename(app.with_suffix(".fixture"))
+    registered = subprocess.check_output([str(LSREGISTER), "-dump"], text=True)
+    for identifier in identifiers:
+        if any(line.split(":", 1)[-1].strip() == identifier
+               for line in registered.splitlines() if line.startswith("identifier:")):
+            raise RuntimeError(f"测试副本仍被系统注册：{identifier}")
+
+
 def copy_app(destination):
-    run("ditto", ROOT / "dist/EasyMarkdown.app", destination)
+    run("ditto", SOURCE_APP, destination)
 
 
 def feed(path, archive, url, build="25", minimum="14.0.0", signature=None):
@@ -78,8 +111,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    run("bash", "scripts/build-app.sh", "debug")
-    run(ROOT / "dist/EasyMarkdown.app/Contents/MacOS/EasyMarkdown", "--update-test", OUTPUT / "configuration", timeout=30)
+    staging = SOURCE_APP.with_suffix(".fixture")
+    run("bash", "scripts/build-app.sh", "debug", env={**os.environ, "EASYMARKDOWN_APP_OUTPUT": str(staging)})
+    configure(staging, {
+        "CFBundleIdentifier": f"app.easymarkdown.updatecheck.{uuid.uuid4().hex}",
+        "SUEnableAutomaticChecks": False,
+        "EasyMarkdownUpdateFixture": True,
+        "EasyMarkdownUpdateScenario": "configuration",
+        "EasyMarkdownUpdateReportPath": str(OUTPUT / "configuration"),
+    })
+    staging.rename(SOURCE_APP)
+    run(SOURCE_APP / "Contents/MacOS/EasyMarkdown", "--update-test", OUTPUT / "configuration", timeout=30)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(OUTPUT)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base_url = f"http://127.0.0.1:{server.server_port}"
@@ -91,9 +133,10 @@ def main():
         for scenario in scenarios:
             directory = OUTPUT / scenario
             directory.mkdir()
-            app = directory / "installed/EasyMarkdown.app"
-            copy_app(app)
             identifier = f"app.easymarkdown.updatecheck.{uuid.uuid4().hex}"
+            fixture_name = f"EasyMarkdownUpdateCheck-{identifier.rsplit('.', 1)[1]}.app"
+            app = directory / "installed" / fixture_name
+            copy_app(app)
             feed_url = f"{base_url}/{scenario}/appcast.xml"
             configure(app, {
                 "CFBundleIdentifier": identifier,
@@ -107,7 +150,7 @@ def main():
                 "EasyMarkdownUpdateReportPath": str(directory),
             })
             if scenario not in ("controller", "preferences", "offline"):
-                candidate = directory / "candidate/EasyMarkdown.app"
+                candidate = directory / "candidate" / fixture_name
                 run("ditto", app, candidate)
                 configure(candidate, {"CFBundleVersion": "25", "EasyMarkdownUpdateScenario": "relaunch"})
                 archive = directory / "update.zip"
@@ -179,6 +222,7 @@ def main():
                 destination = REPORT / path.relative_to(OUTPUT)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, destination)
+        retire_fixtures()
     (OUTPUT / "summary.json").write_text(json.dumps({"passed": results}, ensure_ascii=False, indent=2))
     shutil.copy2(OUTPUT / "summary.json", REPORT / "summary.json")
     print(f"更新验证完成：{REPORT}")
@@ -186,4 +230,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # Also cover failures during the initial build / configuration check.
+        retire_fixtures()

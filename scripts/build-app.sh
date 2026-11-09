@@ -8,7 +8,7 @@ if [[ "$configuration" != "release" && "$configuration" != "debug" ]]; then
 fi
 swift build -c "$configuration"
 binary_dir="$(swift build -c "$configuration" --show-bin-path)"
-app_dir="$PWD/dist/EasyMarkdown.app"
+app_dir="${EASYMARKDOWN_APP_OUTPUT:-$PWD/dist/EasyMarkdown.app}"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$app_dir/Contents/Frameworks"
 cp "$binary_dir/EasyMarkdown" "$app_dir/Contents/MacOS/"
 ditto "$binary_dir/EasyMarkdown_EasyMarkdown.bundle" "$app_dir/Contents/Resources/EasyMarkdown_EasyMarkdown.bundle"

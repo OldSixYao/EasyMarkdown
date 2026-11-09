@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import CryptoKit
 import EasyMarkdownCore
 
 enum ViewMode: String, CaseIterable { case read = "阅读", edit = "编辑", split = "分栏" }
@@ -15,10 +16,20 @@ struct Heading: Identifiable, Decodable {
     let level: Int
 }
 
+struct ReaderSearchResume {
+    let revision: UInt64
+    let query: String
+    let index: Int
+    let offset: Int
+}
+
 @MainActor @Observable
 final class DocumentSession {
     var state: DocumentState
-    var mode: ViewMode = .read
+    var mode: ViewMode = .read {
+        didSet { previewActivity.update(active: isWindowActive, needed: kind == .markdown && mode != .edit) }
+    }
+    let previewActivity = PreviewActivity()
     var showOutline = false
     var showFind = false
     var search = "" {
@@ -51,27 +62,58 @@ final class DocumentSession {
     var synchronizeSplitScroll = true
     @ObservationIgnored weak var document: MarkdownDocument?
     @ObservationIgnored let store = FileStore()
+    @ObservationIgnored let imageBudgetOwner = UUID()
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var draftTask: Task<Void, Never>?
+    @ObservationIgnored private var draftWriteTask: Task<Void, Never>?
+    @ObservationIgnored private var firstPendingDraftEdit: ContinuousClock.Instant?
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private var formatTask: Task<Void, Never>?
     @ObservationIgnored private var formatGeneration = 0
-    @ObservationIgnored private var directorySource: DispatchSourceFileSystemObject?
-    @ObservationIgnored private var watchTask: Task<Void, Never>?
+    @ObservationIgnored var readerSearchResume: ReaderSearchResume?
+    @ObservationIgnored private var directorySubscription: DirectoryMonitor.Subscription?
+    @ObservationIgnored private var pendingReloadForce = false
+    @ObservationIgnored private var reloadAgain = false
+    @ObservationIgnored private var reloadAgainForce = false
+    var isWindowActive = true
     @ObservationIgnored private var lastSignature: String?
     @ObservationIgnored private var closed = false
     @ObservationIgnored private var reloadGeneration = 0
+    @ObservationIgnored private(set) var reloadReadCount = 0
     @ObservationIgnored var replaceText: ((String) -> Void)?
     @ObservationIgnored var applyMarkdown: ((MarkdownCommand) -> Void)?
     @ObservationIgnored var editorFindAction: ((EditorFindRequest) -> Bool)?
     @ObservationIgnored var scrollEditorTo: ((SplitScrollPosition) -> Void)?
     @ObservationIgnored var scrollPreviewTo: ((SplitScrollPosition) -> Void)?
     @ObservationIgnored var alignPreviewToEditor: (() -> Void)?
+    @ObservationIgnored var captureSourcePosition: (() -> SplitScrollPosition?)?
+
+    private var sourcePositionKey: String? {
+        guard let url else { return nil }
+        let hash = SHA256.hash(data: Data(url.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "sourceReadingPosition." + hash
+    }
+
+    func savedSourcePosition() -> SplitScrollPosition? {
+        guard let key = sourcePositionKey else { return nil }
+        if let value = UserDefaults.standard.dictionary(forKey: key), let offset = value["offset"] as? Double,
+           let progress = value["progress"] as? Double {
+            return SplitScrollPosition(offset: offset, progress: progress)
+        }
+        let legacyKey = key.replacingOccurrences(of: "sourceReadingPosition.", with: "readingPosition.")
+        guard let ratio = UserDefaults.standard.dictionary(forKey: legacyKey)?["ratio"] as? Double else { return nil }
+        return SplitScrollPosition(offset: Double(state.text.utf16.count) * ratio, progress: ratio)
+    }
+
+    func saveSourcePosition(_ position: SplitScrollPosition) {
+        guard usesNativeReader, let key = sourcePositionKey else { return }
+        UserDefaults.standard.set(position.arguments, forKey: key)
+    }
 
     func showSearch() {
-        if mode == .read { showFind = true }
+        if mode == .read && !usesNativeReader { showFind = true }
         else { requestEditorFind(.showFindInterface) }
     }
 
@@ -79,10 +121,11 @@ final class DocumentSession {
         showFind = false
         search = ""
         searchResultCount = nil
+        if mode == .read && usesNativeReader { requestEditorFind(.hideFindInterface) }
     }
 
     func navigateSearch(backwards: Bool = false) {
-        if mode == .read {
+        if mode == .read && !usesNativeReader {
             guard !search.isEmpty else { return }
             showFind = true
             findBackwards = backwards
@@ -95,7 +138,7 @@ final class DocumentSession {
 
     func showReplace() {
         guard !isSaving else { return }
-        let query = mode == .read ? search : nil
+        let query = mode == .read && !usesNativeReader ? search : nil
         showFind = false
         searchResultCount = nil
         if mode == .read { mode = .edit }
@@ -108,7 +151,8 @@ final class DocumentSession {
     }
 
     func flushEditorFindRequest() {
-        guard mode != .read, let request = pendingEditorFind,
+        guard mode != .read || usesNativeReader else { return }
+        guard let request = pendingEditorFind,
               editorFindAction?(request) == true else { return }
         pendingEditorFind = nil
     }
@@ -126,18 +170,46 @@ final class DocumentSession {
     init(snapshot: FileSnapshot) { state = DocumentState(snapshot: snapshot) }
     var url: URL? { document?.fileURL }
     var kind: DocumentKind { DocumentKind(url: url) }
+    var usesNativeReader: Bool { kind != .markdown }
+
+    func setWindowActive(_ active: Bool) {
+        guard !closed else { return }
+        let changed = isWindowActive != active
+        isWindowActive = active
+        previewActivity.update(active: active, needed: kind == .markdown && mode != .edit)
+        if active && changed { scheduleReload() }
+    }
+
+    func updateWindowActivity() {
+        let active = NSApp.isActive && document?.windowControllers.contains(where: {
+            $0.window?.isKeyWindow == true && $0.window?.isMiniaturized == false
+        }) == true
+        setWindowActive(active)
+    }
 
     func start() {
         closed = false
+        if loadTask != nil {
+            loadTask?.cancel()
+            loadTask = nil
+            reloadGeneration += 1
+        }
+        reloadAgain = false
+        reloadAgainForce = false
+        pendingReloadForce = false
+        lastSignature = nil
         watchDirectory()
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard self?.closed == false else { return }
                 // End the synchronous access to self before waiting for file I/O.
+                if let subscription = self?.directorySubscription {
+                    DirectoryMonitor.shared.ensureWatching(subscription)
+                }
                 let load = self?.reload(force: false)
                 await load?.value
-                try? await Task.sleep(for: .milliseconds(800))
+                try? await Task.sleep(for: .seconds(self?.isWindowActive == true ? 3 : 15))
             }
         }
         if let url {
@@ -152,55 +224,53 @@ final class DocumentSession {
     }
 
     func stop(discardDraft: Bool) {
+        if usesNativeReader, let position = captureSourcePosition?() { saveSourcePosition(position) }
         closed = true
+        previewActivity.stop()
         cancelFormatting()
-        pollTask?.cancel(); reloadTask?.cancel(); loadTask?.cancel(); draftTask?.cancel(); statusTask?.cancel(); watchTask?.cancel()
+        pollTask?.cancel(); reloadTask?.cancel(); loadTask?.cancel(); draftTask?.cancel(); draftWriteTask?.cancel(); statusTask?.cancel()
         pollTask = nil; reloadTask = nil; draftTask = nil; statusTask = nil
         loadTask = nil
-        watchTask = nil
+        reloadGeneration += 1
+        reloadAgain = false
+        reloadAgainForce = false
+        pendingReloadForce = false
+        draftWriteTask = nil
+        firstPendingDraftEdit = nil
         replaceText = nil; applyMarkdown = nil; editorFindAction = nil
         pendingEditorFind = nil
         scrollEditorTo = nil; scrollPreviewTo = nil; alignPreviewToEditor = nil
+        captureSourcePosition = nil
         recovery = nil
         headings = []
         activeHeadingID = nil
-        directorySource?.cancel(); directorySource = nil
+        if let directorySubscription { DirectoryMonitor.shared.unsubscribe(directorySubscription) }
+        directorySubscription = nil
         if discardDraft, let url { Task { try? await DraftStore.shared.remove(url) } }
     }
 
     private func watchDirectory() {
-        directorySource?.cancel()
-        directorySource = nil
-        watchTask?.cancel()
+        if let directorySubscription { DirectoryMonitor.shared.unsubscribe(directorySubscription) }
+        directorySubscription = nil
         // The deep benchmark never writes externally; exclude filesystem watcher
         // setup (which can wait on file-provider/TCC services) from renderer timings.
         if ProcessInfo.processInfo.environment["EASYMARKDOWN_MEMORY_PROFILE"] == "deep" { return }
         guard let url else { return }
-        let path = url.deletingLastPathComponent().path
-        watchTask = Task { [weak self] in
-            // File providers and volume authorization can block open(). Never
-            // keep the window/event loop waiting for directory monitoring.
-            let descriptor = await Task.detached(priority: .utility) { open(path, O_EVTONLY) }.value
-            guard let self, !Task.isCancelled, !self.closed, self.url == url, descriptor >= 0 else {
-                if descriptor >= 0 { close(descriptor) }
-                return
-            }
-            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor,
-                eventMask: [.write, .rename, .delete, .attrib], queue: .main)
-            source.setEventHandler { [weak self] in self?.scheduleReload() }
-            source.setCancelHandler { close(descriptor) }
-            source.resume()
-            self.directorySource = source
+        directorySubscription = DirectoryMonitor.shared.subscribe(to: url) { [weak self] in
+            self?.scheduleReload(force: false)
         }
     }
 
-    func scheduleReload() {
+    func scheduleReload(force: Bool = true) {
         guard !closed else { return }
+        pendingReloadForce = pendingReloadForce || force
         reloadTask?.cancel()
         reloadTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            let load = self?.reload(force: true)
+            let force = self?.pendingReloadForce == true
+            self?.pendingReloadForce = false
+            let load = self?.reload(force: force)
             await load?.value
         }
     }
@@ -208,10 +278,15 @@ final class DocumentSession {
     @discardableResult
     func reload(force: Bool) -> Task<Void, Never>? {
         guard !closed, !isSaving, let url else { return nil }
-        loadTask?.cancel()
+        if let loadTask {
+            reloadAgain = true
+            reloadAgainForce = reloadAgainForce || force
+            return loadTask
+        }
         reloadGeneration += 1
         let generation = reloadGeneration
         loadTask = Task { [weak self, store, lastSignature] in
+            defer { self?.finishReload(generation: generation) }
             do {
                 try Task.checkCancellation()
                 let signature = try await store.signature(url)
@@ -220,10 +295,11 @@ final class DocumentSession {
                 let snapshot = try await store.read(url)
                 guard !Task.isCancelled, let self, !self.closed, self.url == url,
                       !self.isSaving, generation == self.reloadGeneration else { return }
+                self.reloadReadCount += 1
                 let changed = snapshot.data != self.state.baseline.data
-                let oldText = self.state.text
+                let oldRevision = self.state.revision
                 self.state.receive(snapshot)
-                if oldText != self.state.text { self.cancelFormatting() }
+                if oldRevision != self.state.revision { self.cancelFormatting() }
                 self.lastSignature = signature
                 self.synchronizeDirtyState()
                 if changed && !self.state.hasConflict { self.flash(L10n.text("已加载最新内容")) }
@@ -240,35 +316,65 @@ final class DocumentSession {
         return loadTask
     }
 
-    func edit(_ text: String) {
+    private func finishReload(generation: Int) {
+        guard generation == reloadGeneration else { return }
+        loadTask = nil
+        if reloadAgain && !closed {
+            let force = reloadAgainForce
+            reloadAgain = false
+            reloadAgainForce = false
+            scheduleReload(force: force)
+        }
+    }
+
+    func edit(_ text: String, change: TextChange? = nil) {
         cancelFormatting()
-        state.text = text
+        state.edit(text, change: change)
         synchronizeDirtyState()
         scheduleDraft()
     }
 
     func synchronizeDirtyState() {
         guard let document else { return }
-        document.updateUndoLimit(forByteCount: state.text.utf8.count)
+        document.updateUndoLimit(forByteCount: state.byteCount)
         document.updateChangeCount(state.isDirty ? .changeDone : .changeCleared)
     }
 
     private func scheduleDraft() {
         draftTask?.cancel()
-        guard let url else { return }
+        guard url != nil, !closed else { return }
+        let now = ContinuousClock.now
+        if firstPendingDraftEdit == nil { firstPendingDraftEdit = now }
+        let remaining = now.duration(to: firstPendingDraftEdit!.advanced(by: .seconds(2)))
+        let delay = max(.zero, min(.milliseconds(500), remaining))
         draftTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, self?.closed == false, let state = self?.state else { return }
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.flushDraft()
+        }
+    }
+
+    private func flushDraft() {
+        draftTask = nil
+        guard !closed, draftWriteTask == nil, let url else { return }
+        firstPendingDraftEdit = nil
+        let revision = state.revision
+        let draft = state.isDirty ? RecoveryDraft(baseline: state.baseline.data, text: state.text,
+            savedAt: Date(), baselineID: state.baseline.identity) : nil
+        // An active writer keeps only its value snapshot. New input replaces
+        // the pending timer, rather than cancelling every in-progress write.
+        draftWriteTask = Task { [weak self] in
             do {
-                if state.isDirty {
-                    let draft = RecoveryDraft(baseline: state.baseline.data, text: state.text, savedAt: Date())
-                    try await DraftStore.shared.save(draft, for: url)
-                }
+                if let draft { try await DraftStore.shared.save(draft, for: url) }
                 else { try await DraftStore.shared.remove(url) }
             } catch {
-                guard !Task.isCancelled, self?.closed == false else { return }
-                self?.status = L10n.format("草稿暂存失败：%@", error.localizedDescription)
+                if !Task.isCancelled, self?.closed == false {
+                    self?.status = L10n.format("草稿暂存失败：%@", error.localizedDescription)
+                }
             }
+            guard !Task.isCancelled, let self, !self.closed else { return }
+            self.draftWriteTask = nil
+            if self.state.revision != revision { self.scheduleDraft() }
         }
     }
 
@@ -318,6 +424,11 @@ final class DocumentSession {
         cancelFormatting()
         isSaving = true
         defer { isSaving = false }
+        loadTask?.cancel()
+        loadTask = nil
+        reloadGeneration += 1
+        reloadAgain = false
+        reloadAgainForce = false
         let originalURL = url
         let sameFile = target.standardizedFileURL == originalURL?.standardizedFileURL
         let savedText = state.text
@@ -331,8 +442,12 @@ final class DocumentSession {
         }
         saveFailure = nil
         draftTask?.cancel()
+        draftWriteTask?.cancel()
+        draftWriteTask = nil
+        firstPendingDraftEdit = nil
         state.didSave(snapshot, savedText: savedText)
         document?.fileURL = target
+        previewActivity.update(active: isWindowActive, needed: kind == .markdown && mode != .edit)
         document?.fileModificationDate = try? target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         lastSignature = nil
         if let originalURL { try? await DraftStore.shared.remove(originalURL) }
@@ -366,7 +481,7 @@ final class DocumentSession {
                 self.formatTask = nil
                 self.isFormatting = false
                 guard !self.isSaving, self.mode != .read, self.url == url,
-                      self.state.text == text, formatted != text else { return }
+                      formatted != text else { return }
                 // Apply through the editor only after validating the captured
                 // revision. Native undo and input-method composition stay intact.
                 self.replaceText?(formatted)

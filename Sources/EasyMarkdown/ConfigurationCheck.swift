@@ -38,6 +38,13 @@ import SwiftUI
     private static func views(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(views) }
 
     static func documents(directory: URL) async throws {
+        let pasteboard = NSPasteboard(name: .find)
+        let savedFind = (pasteboard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
+            let copy = NSPasteboardItem()
+            for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+            return copy
+        }
+        defer { pasteboard.clearContents(); if !savedFind.isEmpty { pasteboard.writeObjects(savedFind) } }
         let fixtures: [(String, String)] = [
             ("compose.yaml", "# 注释\r\nname: demo\r\nenabled: true\r\nscript: '<script>window.injected=true</script>'\r\n"),
             ("workflow.yml", "name: demo\r\nsteps:\r\n  - run: echo hello\r\n"),
@@ -61,24 +68,27 @@ import SwiftUI
             guard let root = doc.windowControllers.first?.window?.contentView else {
                 throw SmokeCheck.Failure(message: "Configuration window missing")
             }
-            var reader: WKWebView?
+            var reader: NSTextView?
             try await wait(name + " text preview") {
-                reader = views(root).compactMap { $0 as? WKWebView }.first
+                reader = views(root).compactMap { $0 as? NSTextView }.first { $0.delegate is SourceEditor.Coordinator }
                 guard let reader else { return false }
-                return (try? await reader.evaluateJavaScript("document.querySelector('pre.plain code')?.textContent")) as? String == source.replacingOccurrences(of: "\r\n", with: "\n")
+                return !reader.isEditable && reader.string == source
             }
             guard let reader else { throw SmokeCheck.Failure(message: "Configuration reader missing") }
-            let safe = try await reader.evaluateJavaScript("!window.injected && !document.querySelector('#content script,#content button') && !!document.querySelector('#content .hljs-attr,#content .hljs-string,#content .hljs-section')") as? Bool
-            try require(safe == true, "Configuration preview is unsafe or not highlighted: " + name)
+            try require(!views(root).contains(where: { $0 is WKWebView }), "Configuration reader unexpectedly created a web process")
             try require(doc.session.headings.isEmpty, "Configuration was parsed as Markdown")
-            doc.session.showFind = true
-            doc.session.search = "demo"
-            try await wait("configuration search") { doc.session.searchResultCount == 1 }
+            doc.session.requestEditorFind(.showFindInterface, query: "demo")
+            try await wait("configuration native find bar") { reader.enclosingScrollView?.isFindBarVisible == true }
+            doc.session.navigateSearch()
+            try await wait("configuration native search") {
+                (reader.string as NSString).substring(with: reader.selectedRange()) == "demo"
+            }
+            try require(!doc.session.state.isDirty, "Read-only search modified configuration")
             doc.session.closeSearch()
             doc.session.mode = .split
             var editor: NSTextView?
             try await wait("configuration source editor") {
-                editor = views(root).compactMap { $0 as? NSTextView }.first { $0.delegate is SourceEditor.Coordinator }
+                editor = views(root).compactMap { $0 as? NSTextView }.first { $0.delegate is SourceEditor.Coordinator && $0.isEditable }
                 return editor != nil
             }
             guard let editor, let coordinator = editor.delegate as? SourceEditor.Coordinator else {
@@ -96,7 +106,10 @@ import SwiftUI
             let expected = source.replacingOccurrences(of: "demo", with: "changed")
             try require(try Data(contentsOf: url) == Data([0xEF, 0xBB, 0xBF]) + Data(expected.utf8), "Configuration save changed whitespace, comments or BOM: " + name)
             try await wait("configuration split preview follows edit") {
-                (try? await reader.evaluateJavaScript("document.querySelector('pre.plain code')?.textContent")) as? String == expected.replacingOccurrences(of: "\r\n", with: "\n")
+                views(root).compactMap { $0 as? NSTextView }.contains {
+                    ($0.delegate as? SourceEditor.Coordinator)?.isSecondary == true &&
+                        !$0.isEditable && $0.string == expected
+                }
             }
             if name == "compose.yaml", let window = doc.windowControllers.first?.window {
                 try await ScreenshotCapture.capture(window, to: directory.appendingPathComponent("configuration-yaml.png"))

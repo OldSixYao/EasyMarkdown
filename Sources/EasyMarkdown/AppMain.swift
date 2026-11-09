@@ -41,6 +41,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--lightweight-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task {
+                do {
+                    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                    try await LightweightCheck.run(directory: output)
+                    try Data("passed".utf8).write(to: output.appendingPathComponent("result.txt"))
+                    print("PASS: lightweight checks")
+                    NSApp.terminate(nil)
+                } catch { print("FAIL: \(error)"); exit(1) }
+            }
+            return
+        }
         if Bundle.main.object(forInfoDictionaryKey: "EasyMarkdownUpdateFixture") as? Bool == true,
            let path = Bundle.main.object(forInfoDictionaryKey: "EasyMarkdownUpdateReportPath") as? String {
             Task { await UpdateCheck.run(output: URL(fileURLWithPath: path)) }

@@ -136,6 +136,10 @@
 "语言更改将在下次启动时生效。请先保存文档，再退出并重新打开应用。" = "Language changes apply the next time you open the app. Save your documents, then quit and reopen the app.";
 "跟随系统" = "Follow System";
 "远程图片未加载" = "Remote image not loaded";
+"正在加载图片…" = "Loading image…";
+"图片暂缓加载，滚动后重试或查看原图。" = "Image deferred. Scroll to retry or open the original.";
+"图片无法预览，可查看原图。" = "Image unavailable. Open the original to view it.";
+"查看原图" = "Open Original";
 "退出 EasyMarkdown" = "Quit EasyMarkdown";
 "适中" = "Medium";
 "重做" = "Redo";

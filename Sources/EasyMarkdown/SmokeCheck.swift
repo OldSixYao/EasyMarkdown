@@ -320,8 +320,10 @@ import EasyMarkdownCore
             results.append("Bounded highlighting/layout, asynchronous formatting undo/cancellation, duplicate headings and reusable search indexes pass")
             try await MemorySafetyCheck.run(directory: output)
             results.append("Closed sessions release while reload/draft I/O is blocked; cancelled drafts stay discarded; small and large document undo histories evict old groups")
+            try await LightweightCheck.run(directory: output)
+            results.append("Incremental native edits, cached clean undo, shared targeted monitoring, atomic split/legacy drafts, continuous recovery, image budgets/eviction and sleeping readers preserve content and state")
             try await ConfigurationCheck.documents(directory: output)
-            results.append("YAML/TOML/INI/CONF/CFG/CNF/ENV/Properties/JSONC render safely as highlighted text, support search and split editing, and save comments, BOM and CRLF unchanged")
+            results.append("YAML/TOML/INI/CONF/CFG/CNF/ENV/Properties/JSONC use native highlighted read-only text with native search and split editing, preserving comments, BOM and CRLF")
             try await ConfigurationCheck.associations()
             results.append("Configuration defaults are explicit and scoped to the selected format, with stable Finder types and extension aliases; dotenv variants do not claim .local files")
             try await ConfigurationCheck.customExtensions(directory: output)
@@ -978,7 +980,7 @@ import EasyMarkdownCore
             (try? await preview.evaluateJavaScript("!!document.querySelector('.notice')")) as? Bool == true
         }
         guard let transfer = try await preview.evaluateJavaScript("window.__transferredLength") as? Int,
-              transfer == 500_001, doc.session.state.text.count == 2_000_000 else {
+              transfer == PreviewText.maximumUTF16Count, doc.session.state.text.count == 2_000_000 else {
             throw Failure(message: "Large-preview cap truncated original data or transferred the entire file")
         }
         try await eventually(description: "Outline clears selection when headings disappear") { doc.session.activeHeadingID == nil }

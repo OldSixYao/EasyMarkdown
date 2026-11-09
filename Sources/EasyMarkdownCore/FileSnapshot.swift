@@ -22,6 +22,8 @@ public struct FileSnapshot: Equatable, Sendable {
     public let data: Data
     public let text: String
     public let encoding: Encoding
+    public let identity = UUID()
+    let coordinates: TextCoordinates
 
     public init(data: Data) throws {
         guard data.count <= Self.maximumBytes else { throw DocumentError.tooLarge }
@@ -41,7 +43,10 @@ public struct FileSnapshot: Equatable, Sendable {
             throw DocumentError.unsupportedEncoding
         }
         text = decoded
+        coordinates = TextCoordinates(decoded)
     }
+
+    public static func == (lhs: FileSnapshot, rhs: FileSnapshot) -> Bool { lhs.data == rhs.data }
 
     public func replacingText(_ value: String) throws -> FileSnapshot {
         // Retain the original CRLF convention when the source consistently uses it.

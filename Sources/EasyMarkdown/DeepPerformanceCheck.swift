@@ -62,6 +62,8 @@ import EasyMarkdownCore
             guard var metrics = result as? [String: Any] else { throw CocoaError(.coderInvalidValue) }
             metrics["highlightMs"] = highlightTimes
             metrics["inputBytes"] = text.utf8.count
+            try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted, .sortedKeys])
+                .write(to: directory.appendingPathComponent("metrics.json"))
             try await MemoryCheck.checkpoint("after_continuous_render", directory: directory)
             doc.session.mode = .read
             doc.session.edit("# Large image\n\n![Fixture](large-fixture.png)\n")
@@ -71,6 +73,7 @@ import EasyMarkdownCore
                 try await Task.sleep(for: .milliseconds(100))
             }
             guard let width = try await imageReader.evaluateJavaScript("document.querySelector('img')?.naturalWidth") as? Int, width > 0 else {
+                await recordImageFailure(imageReader, directory: directory)
                 throw NSError(domain: "DeepPerformanceCheck", code: 1, userInfo: [NSLocalizedDescriptionKey: "Image did not load"])
             }
             metrics["imagePreviewPixels"] = width
@@ -104,7 +107,10 @@ import EasyMarkdownCore
                 if width > 0 { break }
                 try await Task.sleep(for: .milliseconds(100))
             }
-            guard width > 0 else { throw CocoaError(.fileReadCorruptFile) }
+            guard width > 0 else {
+                await recordImageFailure(reader, directory: directory)
+                throw CocoaError(.fileReadCorruptFile)
+            }
             let metrics: [String: Any] = ["imagePreviewPixels": width, "openAndImageMs": (ProcessInfo.processInfo.systemUptime - start) * 1000]
             try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted]).write(to: directory.appendingPathComponent("metrics.json"))
             try await MemoryCheck.checkpoint("image_only", directory: directory)
@@ -114,6 +120,17 @@ import EasyMarkdownCore
         } catch {
             try? Data(error.localizedDescription.utf8).write(to: directory.appendingPathComponent("error"))
             exit(1)
+        }
+    }
+
+    private static func recordImageFailure(_ reader: WKWebView, directory: URL) async {
+        let script = """
+            JSON.stringify({html:content.innerHTML,y:scrollY,restoring,
+                images:typeof readerImages==='undefined'?null:[...readerImages.states.values()].map(s=>
+                    ({source:s.source,near:s.near,state:s.state,request:s.request,top:s.frame.getBoundingClientRect().top}))})
+            """
+        if let details = try? await reader.evaluateJavaScript(script) as? String {
+            try? Data(details.utf8).write(to: directory.appendingPathComponent("image-failure.json"))
         }
     }
 

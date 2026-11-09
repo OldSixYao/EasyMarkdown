@@ -12,58 +12,6 @@ private final class WeakReaderMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-final class LocalResourceHandler: NSObject, WKURLSchemeHandler {
-    var root: URL?
-    private static let imageQueue: OperationQueue = {
-        let queue = OperationQueue()
-        queue.name = "EasyMarkdown.ImagePreview"
-        queue.maxConcurrentOperationCount = 2
-        queue.qualityOfService = .utility
-        return queue
-    }()
-    private var requests: [ObjectIdentifier: (operation: BlockOperation, task: any WKURLSchemeTask)] = [:]
-
-    func cancelAll() {
-        for request in requests.values { request.operation.cancel() }
-        requests.removeAll()
-    }
-
-    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        guard let url = urlSchemeTask.request.url, let root else {
-            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist)); return
-        }
-        let id = ObjectIdentifier(urlSchemeTask)
-        let operation = BlockOperation()
-        requests[id] = (operation, urlSchemeTask)
-        operation.addExecutionBlock { [weak self, weak operation] in
-            guard operation?.isCancelled == false else { return }
-            let result = autoreleasepool { Result { try PreviewImage.load(URL(fileURLWithPath: url.path), within: root) } }
-            guard operation?.isCancelled == false else { return }
-            let delivered = DispatchSemaphore(value: 0)
-            DispatchQueue.main.async { [weak self, weak operation] in
-                defer { delivered.signal() }
-                guard let self, let operation, !operation.isCancelled,
-                      let request = self.requests.removeValue(forKey: id) else { return }
-                switch result {
-                case .success(let image):
-                    request.task.didReceive(URLResponse(url: url, mimeType: image.mimeType,
-                        expectedContentLength: image.data.count, textEncodingName: nil))
-                    request.task.didReceive(image.data)
-                    request.task.didFinish()
-                case .failure(let error): request.task.didFailWithError(error)
-                }
-            }
-            // Keep the queue slot until delivery, so a busy main thread cannot
-            // accumulate an unbounded backlog of already-decoded image results.
-            delivered.wait()
-        }
-        Self.imageQueue.addOperation(operation)
-    }
-    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        requests.removeValue(forKey: ObjectIdentifier(urlSchemeTask))?.operation.cancel()
-    }
-}
-
 struct MarkdownPreview: NSViewRepresentable {
     let session: DocumentSession
     var overrideText: String? = nil
@@ -87,6 +35,10 @@ struct MarkdownPreview: NSViewRepresentable {
             session.scrollPreviewTo = { [weak coordinator = context.coordinator] position in
                 coordinator?.synchronizeScroll(position)
             }
+            session.previewActivity.bind(id: context.coordinator.activityID) { [weak coordinator = context.coordinator] finish in
+                guard let coordinator else { finish(nil); return }
+                coordinator.prepareForSleep(finish)
+            }
         }
         if let page = AppResources.bundle.url(forResource: "reader", withExtension: "html", subdirectory: "Resources") {
             webView.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
@@ -105,9 +57,13 @@ struct MarkdownPreview: NSViewRepresentable {
         coordinator.searchTask?.cancel()
         coordinator.renderTask = nil
         coordinator.ready = false
-        coordinator.previousText = nil
+        coordinator.previousRevision = nil
+        coordinator.previousOverride = nil
         coordinator.pendingScroll = nil
         coordinator.resources.cancelAll()
+        if coordinator.parent.overrideText == nil {
+            coordinator.parent.session.previewActivity.unbind(id: coordinator.activityID)
+        }
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "reader")
@@ -117,10 +73,12 @@ struct MarkdownPreview: NSViewRepresentable {
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var parent: MarkdownPreview
         weak var webView: WKWebView?
-        let resources = LocalResourceHandler()
+        let resources: LocalResourceHandler
         var ready = false
-        var previousText: String?
+        var previousRevision: UInt64?
+        var previousOverride: String?
         var previousPreferences = ""
+        private var previousResourceContext = ""
         var previousTarget: String?
         var previousScrollRequest = 0
         var previousSearch = ""
@@ -135,6 +93,35 @@ struct MarkdownPreview: NSViewRepresentable {
         var scrolling = false
         var renderTask: Task<Void, Never>?
         var isDisposed = false
+        let activityID = UUID()
+        private var cachedPositionPath: String?
+        private var cachedPositionKey = ""
+
+        var contentIsCurrent: Bool {
+            previousRevision == parent.session.state.revision && previousOverride == parent.overrideText
+        }
+
+        func prepareForSleep(_ finish: @escaping (NSImage?) -> Void) {
+            guard ready, !isDisposed, let webView else { finish(nil); return }
+            let revision = parent.session.state.revision
+            webView.callAsyncJavaScript("return {position:capturePosition(),search:{query:readerSearch.query,index:readerSearch.index,offset:readerSearch.offset}}",
+                arguments: [:], in: nil, in: .page) { [weak self, weak webView] result in
+                guard let self, !self.isDisposed, let webView else { finish(nil); return }
+                if case .success(let value) = result, let value = value as? [String: Any] {
+                    if let position = value["position"] as? [String: Any] {
+                        UserDefaults.standard.set(position, forKey: self.positionKey)
+                    }
+                    if let search = value["search"] as? [String: Any], let query = search["query"] as? String,
+                       let index = search["index"] as? Int, let offset = search["offset"] as? Int {
+                        self.parent.session.readerSearchResume = ReaderSearchResume(revision: revision,
+                            query: query, index: index, offset: offset)
+                    }
+                }
+                let options = WKSnapshotConfiguration()
+                options.snapshotWidth = NSNumber(value: min(480, webView.bounds.width))
+                webView.takeSnapshot(with: options) { image, _ in finish(image) }
+            }
+        }
 
         func synchronizeScroll(_ position: SplitScrollPosition) {
             pendingScroll = position
@@ -154,16 +141,29 @@ struct MarkdownPreview: NSViewRepresentable {
                 }
         }
 
-        init(_ parent: MarkdownPreview) { self.parent = parent }
+        init(_ parent: MarkdownPreview) {
+            self.parent = parent
+            resources = LocalResourceHandler(owner: parent.session.imageBudgetOwner)
+            super.init()
+            resources.onBudgetChange = { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                self.webView?.callAsyncJavaScript("window.retryReaderImages()", arguments: [:],
+                    in: nil, in: .page, completionHandler: nil)
+            }
+        }
         var positionKey: String {
-            let hash = SHA256.hash(data: Data((parent.session.url?.path ?? "").utf8))
+            let path = parent.session.url?.path ?? ""
+            if path == cachedPositionPath { return cachedPositionKey }
+            let hash = SHA256.hash(data: Data(path.utf8))
                 .map { String(format: "%02x", $0) }.joined()
-            return "readingPosition." + hash
+            cachedPositionPath = path
+            cachedPositionKey = "readingPosition." + hash
+            return cachedPositionKey
         }
 
         func update() {
             guard ready, !isDisposed, let webView else { return }
-            if !hasAlignedScroll && previousText != nil && !rendering,
+            if !hasAlignedScroll && previousRevision != nil && !rendering,
                parent.overrideText == nil && parent.session.mode == .split {
                 hasAlignedScroll = true
                 Task { @MainActor [weak self] in
@@ -173,23 +173,28 @@ struct MarkdownPreview: NSViewRepresentable {
                 }
             }
             resources.root = parent.session.url?.deletingLastPathComponent()
-            let text = parent.overrideText ?? parent.session.state.text
+            resources.remoteImages = parent.remoteImages
             let preferences: [String: Any] = ["fontSize": parent.fontSize, "width": parent.width,
                 "appearance": parent.appearance, "remoteImages": parent.remoteImages,
                 "language": Bundle.main.preferredLocalizations.first ?? "zh-Hans",
                 "strings": ["copy": L10n.text("复制代码"), "copied": L10n.text("已复制"),
                     "copyFailed": L10n.text("复制失败"), "content": L10n.text("文档内容"),
                     "truncated": L10n.text("大文件已使用纯文本预览，仅显示前 500,000 个字符。编辑模式可查看和编辑全文。"),
-                    "remoteImage": L10n.text("远程图片未加载")]]
+                    "remoteImage": L10n.text("远程图片未加载"),
+                    "imageLoading": L10n.text("正在加载图片…"),
+                    "imageBudget": L10n.text("图片暂缓加载，滚动后重试或查看原图。"),
+                    "imageUnavailable": L10n.text("图片无法预览，可查看原图。"),
+                    "openImage": L10n.text("查看原图")]]
             let preferencesKey = "\(parent.fontSize):\(parent.width):\(parent.appearance):\(parent.remoteImages):\(parent.session.url?.absoluteString ?? ""):\(parent.session.kind.rawValue)"
-            if !rendering && (previousText != text || previousPreferences != preferencesKey) {
+            if !rendering && (!contentIsCurrent || previousPreferences != preferencesKey) {
                 renderTask?.cancel()
                 // Coalesce typing bursts before creating IPC arguments and a new DOM tree.
                 renderTask = Task { @MainActor [weak self] in
-                    if self?.previousText != nil {
+                    if self?.previousRevision != nil {
                         try? await Task.sleep(for: .milliseconds(100))
                     }
                     guard !Task.isCancelled, let self, !self.isDisposed else { return }
+                    let text = self.parent.overrideText ?? self.parent.session.state.text
                     self.render(text: text, preferences: preferences, preferencesKey: preferencesKey)
                 }
             }
@@ -205,7 +210,7 @@ struct MarkdownPreview: NSViewRepresentable {
 
         private func updateSearch() {
             guard parent.overrideText == nil, !rendering,
-                  previousText == parent.session.state.text, let webView else { return }
+                  contentIsCurrent, let webView else { return }
             let session = parent.session
             let query = session.showFind && session.mode == .read ? session.search : ""
             guard query != previousSearch || session.findRequest != previousFindRequest ||
@@ -221,14 +226,20 @@ struct MarkdownPreview: NSViewRepresentable {
             let request = session.findRequest
             let backwards = session.findBackwards
             let offset = session.findOffset
+            var arguments: [String: Any] = ["query": query, "backwards": backwards, "request": request, "offset": offset]
+            if let resume = session.readerSearchResume, resume.revision == session.state.revision,
+               resume.query == query, !query.isEmpty {
+                arguments["resume"] = ["index": resume.index, "offset": resume.offset]
+            }
+            session.readerSearchResume = nil
             searchTask = Task { @MainActor [weak self, weak webView] in
                 if changed && !query.isEmpty { try? await Task.sleep(for: .milliseconds(120)) }
                 guard !Task.isCancelled, let self, !self.isDisposed, let webView else { return }
-                webView.callAsyncJavaScript("return window.updateReaderSearch(query, backwards, request, offset)",
-                    arguments: ["query": query, "backwards": backwards, "request": request, "offset": offset], in: nil, in: .page) { [weak self] result in
+                webView.callAsyncJavaScript("return window.updateReaderSearch(query, backwards, request, offset, typeof resume==='undefined'?null:resume)",
+                    arguments: arguments, in: nil, in: .page) { [weak self] result in
                         guard let self, !self.isDisposed, self.searchSerial == serial,
                               self.searchRevision == revision, !self.rendering,
-                              self.previousText == self.parent.session.state.text else { return }
+                              self.contentIsCurrent else { return }
                         let session = self.parent.session
                         let current = session.showFind && session.mode == .read ? session.search : ""
                         guard current == query, session.findRequest == request else { return }
@@ -243,22 +254,36 @@ struct MarkdownPreview: NSViewRepresentable {
 
         private func render(text: String, preferences: [String: Any], preferencesKey: String) {
             guard let webView, ready, !rendering else { return }
+            let resourceContext = "\(parent.remoteImages):\(parent.session.url?.absoluteString ?? ""):\(parent.session.kind.rawValue)"
+            let styleOnly = contentIsCurrent && previousResourceContext == resourceContext
             searchTask?.cancel()
             searchSerial += 1
             searchRevision += 1
-            previousText = text; previousPreferences = preferencesKey; rendering = true
+            previousRevision = parent.session.state.revision
+            previousOverride = parent.overrideText
+            previousPreferences = preferencesKey
+            previousResourceContext = resourceContext
+            rendering = true
             let position = UserDefaults.standard.dictionary(forKey: positionKey) ?? [:]
-            // The reader already truncates at 500k characters; don't transfer 24 MB to
-            // WebKit merely to discard it there. Keep one extra character for the notice.
-            let previewText = text.utf16.count > 500_001 ? String(text.prefix(500_001)) : text
-            webView.callAsyncJavaScript("window.updateDocument(text, kind, baseURL, preferences, position)",
-                arguments: ["text": previewText, "kind": parent.session.kind.rawValue,
+            var arguments: [String: Any] = ["preferences": preferences]
+            let script: String
+            if styleOnly {
+                script = "window.updateReaderPreferences(preferences)"
+            } else {
+                let preview = PreviewText(text)
+                script = "window.updateDocument(text, kind, baseURL, preferences, position, truncated)"
+                arguments.merge(["text": preview.text, "truncated": preview.isTruncated, "kind": parent.session.kind.rawValue,
                     "baseURL": parent.session.url?.absoluteString ?? "file:///", "preferences": preferences,
-                    "position": position], in: nil, in: .page) { [weak self] result in
+                    "position": position]) { _, new in new }
+            }
+            webView.callAsyncJavaScript(script, arguments: arguments, in: nil, in: .page) { [weak self] result in
                 guard let self, !self.isDisposed else { return }
                 self.rendering = false
                 if case .failure(let error) = result { self.parent.session.errorMessage = L10n.format("预览失败：%@", error.localizedDescription) }
                 else {
+                    if self.parent.overrideText == nil && self.contentIsCurrent {
+                        self.parent.session.previewActivity.didRender()
+                    }
                     self.update()
                     if !self.hasAlignedScroll && self.parent.overrideText == nil && self.parent.session.mode == .split {
                         self.hasAlignedScroll = true
@@ -294,13 +319,27 @@ struct MarkdownPreview: NSViewRepresentable {
                 }
             case "sourceScroll":
                 guard parent.overrideText == nil, !rendering,
-                      previousText == parent.session.state.text,
+                      contentIsCurrent,
                       let payload = body["payload"] as? [String: Any],
                       let offset = payload["offset"] as? Double,
                       let progress = payload["progress"] as? Double else { return }
                 parent.session.previewDidScroll(SplitScrollPosition(offset: offset, progress: progress))
             case "link":
                 if let href = body["payload"] as? String { openLink(href) }
+            case "imageRequest":
+                guard let payload = body["payload"] as? [String: Any],
+                      let request = payload["request"] as? String, request.count <= 64,
+                      request.utf8.allSatisfy({ (48...57).contains($0) }),
+                      let source = payload["source"] as? String else { return }
+                resources.requestImage(id: request, source: source) { [weak self] result in
+                    guard let self, !self.isDisposed else { return }
+                    self.webView?.callAsyncJavaScript("window.completeReaderImage(request, result)",
+                        arguments: ["request": request, "result": result], in: nil, in: .page, completionHandler: nil)
+                }
+            case "imageRelease":
+                if let request = body["payload"] as? String { resources.releaseImage(id: request) }
+            case "openImage":
+                if let source = body["payload"] as? String { openImage(source) }
             case "copyCode":
                 guard let payload = body["payload"] as? [String: Any],
                       let request = payload["request"] as? Int,
@@ -318,6 +357,23 @@ struct MarkdownPreview: NSViewRepresentable {
                   let scheme = url.scheme?.lowercased() else { return }
             if ["https", "http", "mailto"].contains(scheme) { NSWorkspace.shared.open(url) }
             else if url.isFileURL { (NSApp.delegate as? AppDelegate)?.open(url) }
+        }
+
+        private func openImage(_ source: String) {
+            guard let url = URL(string: source) else { return }
+            if ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.user == nil, url.password == nil {
+                NSWorkspace.shared.open(url)
+            } else if url.isFileURL, let root = resources.root,
+                      UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
+                Task {
+                    let permitted = await Task.detached(priority: .utility) {
+                        let target = url.standardizedFileURL.resolvingSymlinksInPath()
+                        let folder = root.standardizedFileURL.resolvingSymlinksInPath().path + "/"
+                        return target.path.hasPrefix(folder) ? target : nil
+                    }.value
+                    if let permitted { NSWorkspace.shared.open(permitted) }
+                }
+            }
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,

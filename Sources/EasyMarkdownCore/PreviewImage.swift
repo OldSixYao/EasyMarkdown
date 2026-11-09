@@ -5,25 +5,36 @@ import ImageIO
 public struct PreviewImage: Sendable {
     public let data: Data
     public let mimeType: String
+    public let width: Int
+    public let height: Int
+    public let estimatedDecodedBytes: Int
     public static let maximumPixels = 32_000_000
     public static let maximumFrames = 300
     /// Let WebKit decode at its required display resolution. A native thumbnail
     /// pipeline was measured and rejected because it increased app-side memory.
-    public static func load(_ file: URL, within root: URL) throws -> PreviewImage {
+    public static func load(_ file: URL, within root: URL, maximumBytes: Int = 128 * 1024 * 1024) throws -> PreviewImage {
         let target = file.standardizedFileURL.resolvingSymlinksInPath()
         let folder = root.standardizedFileURL.resolvingSymlinksInPath().path + "/"
         guard target.path.hasPrefix(folder), let type = UTType(filenameExtension: target.pathExtension),
               type.conforms(to: .image) else { throw CocoaError(.fileReadNoPermission) }
         let size = try target.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size <= 128 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+        guard size <= maximumBytes else { throw CocoaError(.fileReadTooLarge) }
         let data = try Data(contentsOf: target, options: .mappedIfSafe)
+        guard data.count <= maximumBytes else { throw CocoaError(.fileReadTooLarge) }
         // SVG stays vector data. Inspect raster metadata without allocating
         // native pixel buffers; WebKit remains the only image decoder.
-        if !type.conforms(to: .svg) { try validateRaster(data) }
-        return PreviewImage(data: data, mimeType: type.preferredMIMEType ?? "application/octet-stream")
+        return try inspect(data, mimeType: type.preferredMIMEType ?? "application/octet-stream")
     }
 
-    private static func validateRaster(_ data: Data) throws {
+    public static func inspect(_ data: Data, mimeType: String) throws -> PreviewImage {
+        guard data.count <= 128 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+        if mimeType.lowercased().split(separator: ";").first == "image/svg+xml" {
+            // Vector complexity is not represented by raster dimensions. Bound
+            // its source and reserve a conservative charge without rasterizing.
+            guard data.count <= 2 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+            return PreviewImage(data: data, mimeType: "image/svg+xml", width: 0, height: 0,
+                                estimatedDecodedBytes: 16 * 1024 * 1024)
+        }
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
             throw CocoaError(.fileReadCorruptFile)
@@ -43,5 +54,8 @@ public struct PreviewImage: Sendable {
             // all frames at the largest canvas size, including GIF subframes.
             guard width <= maximumPixels / count / height else { throw CocoaError(.fileReadTooLarge) }
         }
+        let type = CGImageSourceGetType(source).flatMap { UTType($0 as String) }
+        return PreviewImage(data: data, mimeType: type?.preferredMIMEType ?? mimeType,
+            width: width, height: height, estimatedDecodedBytes: width * height * count * 4)
     }
 }

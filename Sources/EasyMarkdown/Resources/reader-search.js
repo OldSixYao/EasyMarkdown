@@ -85,7 +85,7 @@ function readerSearchRange(index) {
   return range;
 }
 
-window.updateReaderSearch = function(query, backwards, request, offset) {
+window.updateReaderSearch = function(query, backwards, request, offset, resume = null) {
   const sameContent = query === readerSearch.query && renderGeneration === readerSearch.generation;
   const previousIndex = readerSearch.index;
   const movement = request === readerSearch.request ? 0 : offset === undefined ?
@@ -110,6 +110,8 @@ window.updateReaderSearch = function(query, backwards, request, offset) {
       }
       readerSearch.index = readerSearch.count ? (sameContent ?
         ((Math.max(0, previousIndex) + movement) % readerSearch.count + readerSearch.count) % readerSearch.count : 0) : -1;
+      if (resume && readerSearch.count) readerSearch.index =
+        ((Math.max(0, resume.index) + (offset - resume.offset)) % readerSearch.count + readerSearch.count) % readerSearch.count;
     }
   } else if (readerSearch.count && request !== readerSearch.request) {
     // SwiftUI can coalesce several key presses; retain their net movement.
@@ -130,13 +132,15 @@ window.updateReaderSearch = function(query, backwards, request, offset) {
       readerSearch.selection = true;
     }
     // Reveal matches inside horizontally scrolling code/table containers too.
-    range.startContainer.parentElement?.scrollIntoView({block:'nearest', inline:'nearest'});
-    const rect = range.getBoundingClientRect();
-    if (rect.top < 28 || rect.bottom > innerHeight - 28) scrollBy(0, rect.top - innerHeight / 2);
-    const scroller = range.startContainer.parentElement?.closest('.code-copy-scroll,table');
-    if (scroller) {
-      const bounds = scroller.getBoundingClientRect();
-      if (rect.left < bounds.left || rect.right > bounds.right) scroller.scrollLeft += rect.left - bounds.left - 20;
+    if (!resume || offset !== resume.offset) {
+      range.startContainer.parentElement?.scrollIntoView({block:'nearest', inline:'nearest'});
+      const rect = range.getBoundingClientRect();
+      if (rect.top < 28 || rect.bottom > innerHeight - 28) scrollBy(0, rect.top - innerHeight / 2);
+      const scroller = range.startContainer.parentElement?.closest('.code-copy-scroll,table');
+      if (scroller) {
+        const bounds = scroller.getBoundingClientRect();
+        if (rect.left < bounds.left || rect.right > bounds.right) scroller.scrollLeft += rect.left - bounds.left - 20;
+      }
     }
   }
   return {query, count:readerSearch.count, index:readerSearch.index, generation:renderGeneration, truncated:previewTruncated};

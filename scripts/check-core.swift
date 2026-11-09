@@ -71,6 +71,12 @@ func XCTFail(_ message: String, file: StaticString = #file, line: UInt = #line) 
         try await files.testAtomicReplacementChangesSignatureAndCanReload()
         try await files.testNormalSaveAndSaveAsPreserveBothVersions()
         try await files.testDeletedFileIsNotSilentlyRecreatedBySave()
-        print("PASS: 30 core checks — file safety, configuration round trips, formatting, Markdown commands and image loading safety")
+        let performance = PerformanceStateTests()
+        try performance.testDistantUnicodeEditsAndUndoRestoreCleanState()
+        try performance.testCanonicalUnicodeEqualityRetainsEditCoordinates()
+        try performance.testRandomEditsAgreeWithFullComparison()
+        try performance.testSaveDoesNotInvalidateUnchangedEditorRevision()
+        performance.testPreviewBudgetHandlesEmojiAndLongCombiningSequences()
+        print("PASS: 35 core checks — file safety, configuration round trips, formatting, Markdown commands, image loading and incremental Unicode state")
     }
 }

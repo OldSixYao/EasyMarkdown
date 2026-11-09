@@ -2,6 +2,9 @@
 const content = document.getElementById('content');
 const copyStatus = document.getElementById('copy-status');
 const send = (type, payload) => window.webkit?.messageHandlers.reader?.postMessage({type, payload});
+const readerImages = new ReaderImages(send);
+window.completeReaderImage = (request, result) => readerImages.complete(request, result);
+window.retryReaderImages = () => readerImages.schedule(true);
 let lastPosition = null;
 let restoring = false;
 let imageResizeObserver;
@@ -12,15 +15,23 @@ let previewTruncated = false;
 let sourceScrollTimer;
 let renderedBlocks = [];
 let renderContext = '';
+let parseContext = '';
+let lastDocument = null;
+let lastStyleKey = '';
+let lastHeadingsPayload = '';
 let readingBlocks = [];
 let readingKeys = new Map();
 let headingElements = [];
 let lastActiveHeading;
 const copyTargets = new WeakMap();
+const readingTextCache = new WeakMap();
+const headingTitleCache = new WeakMap();
 const pendingCopies = new Map();
 let nextCopyRequest = 0;
 let readerStrings = {copy:'复制代码', copied:'已复制', copyFailed:'复制失败', content:'文档内容',
-  truncated:'大文件已使用纯文本预览，仅显示前 500,000 个字符。编辑模式可查看和编辑全文。', remoteImage:'远程图片未加载'};
+  truncated:'大文件已使用纯文本预览，仅显示前 500,000 个字符。编辑模式可查看和编辑全文。', remoteImage:'远程图片未加载',
+  imageLoading:'正在加载图片…', imageBudget:'图片暂缓加载，滚动后重试或查看原图。',
+  imageUnavailable:'图片无法预览，可查看原图。', openImage:'查看原图'};
 
 function makeCopyButton(target) {
   const button = document.createElement('button');
@@ -86,13 +97,26 @@ function updateReadingBlocks() {
   readingBlocks = [];
   readingKeys = new Map();
   for (const element of content.children) {
-    const text = element.textContent.trim();
-    if (!text) continue;
-    const key = text.slice(0, 180);
+    let key = readingTextCache.get(element);
+    if (key === undefined) {
+      key = readerText(element).trim().slice(0, 180);
+      readingTextCache.set(element, key);
+    }
+    if (!key) continue;
     const matches = readingKeys.get(key) || [];
     const block = {element, key, duplicate:matches.length};
     matches.push(block); readingKeys.set(key, matches); readingBlocks.push(block);
   }
+}
+
+function readerText(element) {
+  if (!element.querySelector('button,.image-status')) return element.textContent;
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+    acceptNode: node => node.parentElement?.closest('button,.image-status') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
+  const parts = [];
+  while (walker.nextNode()) parts.push(walker.currentNode.data);
+  return parts.join('');
 }
 
 function sourcePosition() {
@@ -155,22 +179,45 @@ function restorePosition(position) {
   window.scrollTo(0, Math.max(0, y));
 }
 
-window.updateDocument = function(text, kind, baseURL, preferences, savedPosition) {
+window.updateReaderPreferences = function(preferences, preservePosition = true) {
+  const styleKey = JSON.stringify([preferences.fontSize, preferences.width, preferences.appearance,
+    preferences.language, preferences.strings]);
+  if (styleKey === lastStyleKey) return;
+  const position = preservePosition && content.childElementCount ? capturePosition() : null;
+  const layoutChanged = document.documentElement.style.getPropertyValue('--size') !== preferences.fontSize + 'px' ||
+    document.documentElement.style.getPropertyValue('--width') !== preferences.width + 'px';
   readerStrings = {...readerStrings, ...preferences.strings};
   document.documentElement.lang = preferences.language || 'zh-Hans';
   content.setAttribute('aria-label', readerStrings.content);
+  document.documentElement.style.setProperty('--size', preferences.fontSize + 'px');
+  document.documentElement.style.setProperty('--width', preferences.width + 'px');
+  document.documentElement.dataset.appearance = preferences.appearance;
+  lastStyleKey = styleKey;
+  if (layoutChanged) invalidateReaderSearchIndex();
+  if (position) {
+    restorePosition(position);
+    lastPosition = capturePosition();
+    updateActiveHeading();
+  }
+};
+
+window.updateDocument = function(text, kind, baseURL, preferences, savedPosition, suppliedTruncated = false) {
+  const limit = 500000;
+  const truncated = suppliedTruncated || text.length > limit;
+  const source = text.length > limit ? text.slice(0, limit) : text;
+  if (lastDocument && lastDocument.source === source && lastDocument.kind === kind &&
+      lastDocument.baseURL === baseURL && lastDocument.remoteImages === preferences.remoteImages &&
+      lastDocument.truncated === truncated) {
+    window.updateReaderPreferences(preferences);
+    return;
+  }
   invalidateReaderSearch();
   const generation = ++renderGeneration;
   lastActiveHeading = undefined;
   const position = content.childElementCount ? capturePosition() : savedPosition;
   restoring = true;
-  document.documentElement.style.setProperty('--size', preferences.fontSize + 'px');
-  document.documentElement.style.setProperty('--width', preferences.width + 'px');
-  document.documentElement.dataset.appearance = preferences.appearance;
-  const limit = 500000;
-  const truncated = text.length > limit;
+  window.updateReaderPreferences(preferences, false);
   previewTruncated = truncated;
-  const source = truncated ? text.slice(0, limit) : text;
   let nextContent;
   let pendingNodes = null;
   let changedElements = [];
@@ -191,34 +238,53 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
       return offset + low;
     };
     const context = JSON.stringify([baseURL, preferences.remoteImages, source.length < 150000]);
-    const previous = context === renderContext ? renderedBlocks : [];
+    const linksContext = JSON.stringify(tokens.links);
+    const sameLinks = parseContext === linksContext;
+    const matchesToken = (token, block) => block && token.type === block.type && token.raw === block.raw;
+    let prefix = 0, suffix = 0;
+    while (prefix < tokens.length && matchesToken(tokens[prefix], renderedBlocks[prefix])) prefix++;
+    while (suffix < tokens.length - prefix && suffix < renderedBlocks.length - prefix &&
+      matchesToken(tokens[tokens.length-suffix-1], renderedBlocks[renderedBlocks.length-suffix-1])) suffix++;
+    const cache = new Map();
+    for (let i = prefix; i < renderedBlocks.length - suffix; i++) {
+      const block = renderedBlocks[i];
+      const key = block.type + '\0' + block.raw;
+      let matches = cache.get(key);
+      if (!matches) { matches = {blocks:[], index:0}; cache.set(key, matches); }
+      matches.blocks.push(block);
+    }
     const next = [];
     let offset = 0;
-    for (const token of tokens) {
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
       const start = originalOffset(offset);
       offset += token.raw.length;
       const single = [token];
       single.links = tokens.links;
-      next.push({html:marked.parser(single, {gfm:true, breaks:false}), start, end:originalOffset(offset)});
+      let previous;
+      if (i < prefix) previous = renderedBlocks[i];
+      else if (i >= tokens.length - suffix) previous = renderedBlocks[renderedBlocks.length - tokens.length + i];
+      else {
+        const matches = cache.get(token.type + '\0' + token.raw);
+        previous = matches?.blocks[matches.index++];
+      }
+      const html = previous && sameLinks ? previous.html :
+        marked.parser(single, {gfm:true, breaks:false});
+      next.push({type:token.type, raw:token.raw, html, start, end:originalOffset(offset),
+        nodes:previous && context === renderContext && previous.html === html ? previous.nodes : undefined});
     }
-    let prefix = 0, suffix = 0;
-    while (prefix < next.length && prefix < previous.length && next[prefix].html === previous[prefix].html) prefix++;
-    while (suffix < next.length - prefix && suffix < previous.length - prefix &&
-           next[next.length - suffix - 1].html === previous[previous.length - suffix - 1].html) suffix++;
-    for (let i = 0; i < prefix; i++) next[i].nodes = previous[i].nodes;
-    for (let i = 0; i < suffix; i++) next[next.length - i - 1].nodes = previous[previous.length - i - 1].nodes;
-
-    if (prefix + suffix < next.length) {
+    const changed = next.filter(block => !block.nodes);
+    if (changed.length) {
       const inertDocument = document.implementation.createHTMLDocument('');
       const staging = inertDocument.createElement('div');
       const template = inertDocument.createElement('template');
-      for (let i = prefix; i < next.length - suffix; i++) {
+      for (const block of changed) {
         // Only changed blocks are parsed into new DOM nodes. They stay inert
         // until the entire changed tree has passed the same security filter.
-        template.innerHTML = next[i].html;
+        template.innerHTML = block.html;
         const group = inertDocument.createElement('section');
         group.append(template.content);
-        next[i].group = group;
+        block.group = group;
         staging.append(group);
       }
       DOMPurify.sanitize(staging, {
@@ -227,12 +293,12 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
         FORBID_ATTR:['style','srcset','autofocus','contenteditable','name']
       });
       DOMPurify.removed = [];
-      for (let i = prefix; i < next.length - suffix; i++) {
+      for (const block of changed) {
         // Read back the sanitized children, including safe children unwrapped
         // from disallowed HTML. Never reattach the original unfiltered nodes.
-        next[i].nodes = [...next[i].group.childNodes];
-        delete next[i].group;
-        changedElements.push(...next[i].nodes.filter(node => node.nodeType === Node.ELEMENT_NODE));
+        block.nodes = [...block.group.childNodes];
+        delete block.group;
+        changedElements.push(...block.nodes.filter(node => node.nodeType === Node.ELEMENT_NODE));
       }
     }
     pendingNodes = next.flatMap(block => block.nodes);
@@ -243,9 +309,10 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
     }
     renderedBlocks = next;
     renderContext = context;
+    parseContext = linksContext;
     nextContent = null;
   } else {
-    renderedBlocks = []; renderContext = '';
+    renderedBlocks = []; renderContext = ''; parseContext = '';
     nextContent = document.createDocumentFragment();
     const pre = document.createElement('pre');
     pre.className = 'plain';
@@ -267,22 +334,7 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
     [...(element.matches(selector) ? [element] : []), ...element.querySelectorAll(selector)]);
   const imageReplacements = new Map();
   changedMatching('img').forEach(img => {
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    const original = img.getAttribute('src') || '';
-    try {
-      const resolved = new URL(original, baseURL);
-      if (resolved.protocol === 'file:') {
-        img.src = 'document-resource://local' + resolved.pathname;
-      } else if (['https:','http:'].includes(resolved.protocol)) {
-        if (!preferences.remoteImages) {
-          const placeholder = document.createElement('span'); placeholder.className = 'image-placeholder';
-          placeholder.textContent = '[' + readerStrings.remoteImage + (img.alt ? ': ' + img.alt : '') + ']';
-          img.replaceWith(placeholder);
-          imageReplacements.set(img, placeholder);
-        } else { img.referrerPolicy = 'no-referrer'; img.loading = 'lazy'; }
-      } else if (!original.startsWith('data:image/')) { img.removeAttribute('src'); }
-    } catch { img.removeAttribute('src'); }
+    imageReplacements.set(img, readerImages.prepare(img, baseURL, preferences.remoteImages, readerStrings));
   });
   if (imageReplacements.size && pendingNodes) {
     pendingNodes = pendingNodes.map(node => imageReplacements.get(node) || node);
@@ -300,10 +352,12 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
       else content.insertBefore(node, cursor);
     }
   }
+  readerImages.prune();
   const ids = new Set();
   const nextSuffix = new Map();
   const headings = [...content.querySelectorAll('h1,h2,h3,h4,h5,h6')].map(el => {
-    const title = el.textContent.trim();
+    let title = headingTitleCache.get(el);
+    if (title === undefined) { title = readerText(el).trim(); headingTitleCache.set(el, title); }
     let slug = title.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu,'').replace(/\s+/g,'-') || 'section';
     const base = slug; let n = nextSuffix.get(base) || 1;
     while (ids.has(slug)) slug = base + '-' + n++;
@@ -342,7 +396,12 @@ window.updateDocument = function(text, kind, baseURL, preferences, savedPosition
     }
   }
   updateReadingBlocks();
-  send('headings', headings);
+  const headingsPayload = JSON.stringify(headings);
+  if (headingsPayload !== lastHeadingsPayload) {
+    send('headings', headings);
+    lastHeadingsPayload = headingsPayload;
+  }
+  lastDocument = {source, kind, baseURL, remoteImages:preferences.remoteImages, truncated};
   headingElements = [...content.querySelectorAll('h1,h2,h3,h4,h5,h6')].filter(element => element.getClientRects().length);
   // Background WebKit pages may suspend animation frames; restore synchronously too.
   restorePosition(position);

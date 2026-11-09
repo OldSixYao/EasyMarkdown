@@ -14,6 +14,7 @@ parser.add_argument("app", type=Path)
 parser.add_argument("output", type=Path)
 parser.add_argument("--profile", choices=["standard", "deep", "image"], default="standard")
 args = parser.parse_args()
+import os
 directory = args.output.resolve()
 directory.mkdir(parents=True, exist_ok=False)
 if args.profile in ("deep", "image"):
@@ -37,10 +38,15 @@ responsible.argtypes = [ctypes.c_int]
 responsible.restype = ctypes.c_int
 # A raw subprocess inherits the caller's responsibility identity. Launch Services
 # isolates the app so its WebKit helpers can be attributed without counting others.
-subprocess.run(["open", "-n", "-a", str(args.app.resolve()), "--env", "EASYMARKDOWN_MEMORY_CHECK=" + str(directory),
+launch = ["open", "-n", "-a", str(args.app.resolve()), "--env", "EASYMARKDOWN_MEMORY_CHECK=" + str(directory),
                 "--env", "EASYMARKDOWN_MEMORY_PROFILE=" + ("deep" if args.profile == "image" else args.profile),
                 "--env", "EASYMARKDOWN_MEMORY_IMAGE_ONLY=" + ("1" if args.profile == "image" else "0"),
-                "--stdout", str(directory / "app.log"), "--stderr", str(directory / "app.log")], check=True)
+                "--stdout", str(directory / "app.log"), "--stderr", str(directory / "app.log")]
+if os.environ.get("EASYMARKDOWN_EXTENDED_MEMORY") == "1":
+    launch += ["--env", "EASYMARKDOWN_EXTENDED_MEMORY=1"]
+if os.environ.get("EASYMARKDOWN_MEASUREMENT_SCENARIO"):
+    launch += ["--env", "EASYMARKDOWN_MEASUREMENT_SCENARIO=" + os.environ["EASYMARKDOWN_MEASUREMENT_SCENARIO"]]
+subprocess.run(launch, check=True)
 pid = None
 
 def sample():

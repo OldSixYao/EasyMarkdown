@@ -30,6 +30,10 @@ final class MarkdownDocument: NSDocument {
     nonisolated override class var writableTypes: [String] { readableTypes }
     nonisolated override class func isNativeType(_ type: String) -> Bool { true }
 
+    // AppKit adjusts its internal counter after undo notifications. The buffer's
+    // cached baseline comparison is authoritative, including undo back to clean.
+    override var isDocumentEdited: Bool { session.state.isDirty }
+
     override func prepareSavePanel(_ savePanel: NSSavePanel) -> Bool {
         if let url = fileURL {
             savePanel.nameFieldStringValue = url.lastPathComponent

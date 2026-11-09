@@ -25,11 +25,27 @@ struct DocumentView: View {
                 }
                 // Keep the visible pane's identity when adding/removing its neighbor.
                 HSplitView {
-                    if session.mode != .read {
-                        SourceEditor(session: session).frame(minWidth: 240)
+                    if session.mode != .read || session.usesNativeReader {
+                        SourceEditor(session: session, isReadOnly: session.mode == .read).frame(minWidth: 240)
                     }
                     if session.mode != .edit {
-                        MarkdownPreview(session: session).frame(minWidth: 240)
+                        if session.usesNativeReader {
+                            if session.mode == .split {
+                                SourceEditor(session: session, isReadOnly: true, isSecondary: true).frame(minWidth: 240)
+                            }
+                        } else {
+                            ZStack(alignment: .top) {
+                                if let snapshot = session.previewActivity.snapshot {
+                                    Image(nsImage: snapshot).resizable().scaledToFit()
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                                        .accessibilityHidden(true)
+                                }
+                                if session.previewActivity.isAwake {
+                                    MarkdownPreview(session: session)
+                                        .opacity(session.previewActivity.snapshot == nil ? 1 : 0)
+                                }
+                            }.frame(minWidth: 240)
+                        }
                     }
                 }
             }
@@ -48,16 +64,40 @@ struct DocumentView: View {
                     Button(L10n.text("关闭")) { session.showExternal = false }.keyboardShortcut(.cancelAction)
                 }.padding()
                 Divider()
-                MarkdownPreview(session: session, overrideText: session.state.external?.text ?? session.state.baseline.text)
+                if session.usesNativeReader {
+                    SourceEditor(session: session, isReadOnly: true,
+                        overrideText: session.state.external?.text ?? session.state.baseline.text)
+                } else {
+                    MarkdownPreview(session: session, overrideText: session.state.external?.text ?? session.state.baseline.text)
+                }
             }.frame(width: 760, height: 600)
         }
         .onDrop(of: [.fileURL], isTargeted: nil, perform: acceptDrop)
         .onChange(of: session.showFind) { _, visible in searchFocused = visible }
+        .onAppear { DispatchQueue.main.async { session.updateWindowActivity() } }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { event in
             if let window = event.object as? NSWindow,
                session.document?.windowControllers.contains(where: { $0.window === window }) == true {
-                session.scheduleReload()
+                session.setWindowActive(true)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { event in
+            if let window = event.object as? NSWindow,
+               session.document?.windowControllers.contains(where: { $0.window === window }) == true {
+                session.setWindowActive(false)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didMiniaturizeNotification)) { event in
+            if let window = event.object as? NSWindow,
+               session.document?.windowControllers.contains(where: { $0.window === window }) == true {
+                session.setWindowActive(false)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            session.setWindowActive(false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            session.updateWindowActivity()
         }
     }
 
