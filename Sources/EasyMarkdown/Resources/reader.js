@@ -23,6 +23,35 @@ let readingBlocks = [];
 let readingKeys = new Map();
 let headingElements = [];
 let lastActiveHeading;
+let selectionStatisticsEnabled = false;
+let selectionStatisticsRevision = '';
+let selectionStatisticsTimer;
+let selectionStatisticsInteraction = false;
+let lastSelectionStatistics = null;
+
+function scheduleSelectionStatistics(interaction = false) {
+  selectionStatisticsInteraction ||= interaction;
+  if (!selectionStatisticsEnabled || selectionStatisticsTimer) return;
+  selectionStatisticsTimer = setTimeout(() => {
+    selectionStatisticsTimer = null;
+    const selection = getSelection();
+    const inside = selection?.rangeCount && selection.getRangeAt(0).intersectsNode(content);
+    const text = inside && !selection.isCollapsed ? selection.toString() : '';
+    const key = selectionStatisticsRevision + '\0' + text;
+    const interaction = selectionStatisticsInteraction;
+    selectionStatisticsInteraction = false;
+    if (key === lastSelectionStatistics && !interaction) return;
+    lastSelectionStatistics = key;
+    send('selection', {text, revision:selectionStatisticsRevision, interaction});
+  }, 16);
+}
+
+document.addEventListener('selectionchange', () => scheduleSelectionStatistics());
+content.addEventListener('pointerdown', () => scheduleSelectionStatistics(true));
+document.addEventListener('keyup', () => {
+  const selection = getSelection();
+  if (selection?.anchorNode && content.contains(selection.anchorNode)) scheduleSelectionStatistics(true);
+});
 const copyTargets = new WeakMap();
 const readingTextCache = new WeakMap();
 const headingTitleCache = new WeakMap();
@@ -180,6 +209,13 @@ function restorePosition(position) {
 }
 
 window.updateReaderPreferences = function(preferences, preservePosition = true) {
+  const revisionChanged = selectionStatisticsRevision !== preferences.statisticsRevision;
+  selectionStatisticsEnabled = preferences.selectionStatistics === true;
+  selectionStatisticsRevision = preferences.statisticsRevision || '';
+  if (revisionChanged) {
+    lastSelectionStatistics = null;
+    scheduleSelectionStatistics();
+  }
   const styleKey = JSON.stringify([preferences.fontSize, preferences.width, preferences.appearance,
     preferences.language, preferences.strings]);
   if (styleKey === lastStyleKey) return;

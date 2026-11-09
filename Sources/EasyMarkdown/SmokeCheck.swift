@@ -39,6 +39,8 @@ import EasyMarkdownCore
                 throw Failure(message: "About panel repository is not a clickable link")
             }
             results.append("About panel includes the app icon, bundle version and clickable GitHub repository link")
+            try SourceHighlightingCheck.run()
+            results.append("各格式的字符串、注释、数值及行内代码互不覆盖，原生阅读和分栏预览高亮一致")
             (NSApp.delegate as? AppDelegate)?.showWelcome(nil)
             try await Task.sleep(for: .milliseconds(200))
             guard let welcome = NSApp.windows.first(where: { $0.title == "EasyMarkdown" }),
@@ -59,6 +61,7 @@ import EasyMarkdownCore
             results.append("Welcome opens at 720 × 560 with a 640 × 520 minimum and supports resizing")
             try await EditorWorkspaceCheck.check(directory: output.appendingPathComponent("editor-workspace"))
             results.append("编辑行号按逻辑行显示并保留输入、撤销和局部排版；原生标签支持即时合并、拆分和关闭取消")
+            results.append("底部统计在阅读与编辑中常驻，鼠标拖选实时更新实际文字，分栏跟随当前选区并保留大文件局部扫描")
             let url = output.appendingPathComponent("自动刷新 测试.md")
             let source = ("# First heading\n\nOriginal content\n\n[Reference link][guide]\n\n[guide]: https://example.com\n\n| 文档 | 状态 |\n| --- | --- |\n| Markdown | 可阅读 |\n\n- [x] 支持任务\n\n" +
                 (1...50).map { "## Section \($0)\n\nParagraph \($0) 文档 📝\n\n" }.joined())
@@ -244,11 +247,22 @@ import EasyMarkdownCore
             }
             guard let reader = descendants(root).compactMap({ $0 as? WKWebView }).first else { throw Failure(message: "Reader missing") }
             try await eventually { (try? await reader.evaluateJavaScript("typeof window.updateDocument")) as? String == "function" }
-            let untrusted = "# Safety\n\n<img src=x onerror=\"window.injected=true\"><script>window.injected=true</script><iframe src=\"https://example.com\"></iframe>\n\n![remote](https://example.com/tracker.png)\n\n```json\n{\"ok\":true}\n```"
+            let untrusted = "# Safety\n\n<img src=x onerror=\"window.injected=true\"><script>window.injected=true</script><iframe src=\"https://example.com\"></iframe>\n\n![remote](https://example.com/tracker.png)\n\n```json\n{\"model\":\"gpt-image-2.6-sunburst\",\"text\":\"true null 42\",\"count\":-2.6e+10,\"ok\":true}\n```"
             try Data(untrusted.utf8).write(to: copy, options: .atomic)
             try await eventually { (try? await reader.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "Safety" }
             let safe = try await reader.evaluateJavaScript("!window.injected && !document.querySelector('#content script, #content iframe, #content [onerror]') && !!document.querySelector('.image-placeholder') && !!document.querySelector('.hljs-attr')") as? Bool
             guard safe == true else { throw Failure(message: "Sanitization, remote-image default or syntax highlighting failed") }
+            let codeColors = try await reader.evaluateJavaScript(#"""
+            (() => {
+              const block = document.querySelector('pre code.language-json');
+              const strings = [...block.querySelectorAll('.hljs-string')];
+              return ['"gpt-image-2.6-sunburst"', '"true null 42"'].every(value =>
+                strings.some(node => node.textContent === value && node.children.length === 0)) &&
+                block.querySelector('.hljs-number')?.textContent === '-2.6e+10' &&
+                getComputedStyle(block.querySelector('.hljs-attr')).color !== getComputedStyle(strings[0]).color;
+            })()
+            """#) as? Bool
+            guard codeColors == true else { throw Failure(message: "排版阅读的代码块错误拆分了字符串或数值颜色") }
             results.append("Untrusted HTML sanitized; remote images blocked by default; code highlighted")
 
             try await codeCopyProbe(reader: reader, document: doc, file: copy, output: output)
@@ -568,7 +582,10 @@ import EasyMarkdownCore
         try await eventually { editor.selectedRange() == first }
         try await Task.sleep(for: .milliseconds(50))
         doc.session.requestEditorFind(.replace)
-        try await eventually(description: "native single replace updates buffer") { doc.session.state.text.contains("替换<&>") }
+        try await eventually(description: "native single replace updates buffer and statistics") {
+            doc.session.state.text.contains("替换<&>") &&
+                doc.session.editorStatistics.total == DocumentStatisticsIndex(doc.session.state.text as NSString).total
+        }
         guard doc.session.state.isDirty, try String(contentsOf: url, encoding: .utf8) == source else {
             throw Failure(message: "Single replace was saved automatically or failed to mark dirty")
         }
@@ -583,18 +600,26 @@ import EasyMarkdownCore
         try await eventually { doc.session.state.text == source }
         try await Task.sleep(for: .milliseconds(50))
         doc.session.requestEditorFind(.replaceAll)
-        try await eventually(description: "native replace all") { !doc.session.state.text.lowercased().contains("alpha") }
+        try await eventually(description: "native replace all and statistics") {
+            !doc.session.state.text.lowercased().contains("alpha") &&
+                doc.session.editorStatistics.total == DocumentStatisticsIndex(doc.session.state.text as NSString).total
+        }
         guard doc.session.state.text.components(separatedBy: "替换<&>").count - 1 == 7 else {
             throw Failure(message: "Native replace all did not include Markdown source/hidden matches")
         }
         try await Task.sleep(for: .milliseconds(50))
         editor.undoManager?.undo()
-        try await eventually(description: "replace all undo") { doc.session.state.text == source }
+        try await eventually(description: "replace all undo and statistics") {
+            doc.session.state.text == source && doc.session.editorStatistics.total == DocumentStatisticsIndex(source as NSString).total
+        }
         try setField(findField, value: "中文")
         try setField(replacementField, value: "")
         try await Task.sleep(for: .milliseconds(50))
         doc.session.requestEditorFind(.replaceAll)
-        try await eventually(description: "empty replacement removes literal source matches") { !doc.session.state.text.contains("中文") }
+        try await eventually(description: "empty replacement removes literal source matches and updates statistics") {
+            !doc.session.state.text.contains("中文") &&
+                doc.session.editorStatistics.total == DocumentStatisticsIndex(doc.session.state.text as NSString).total
+        }
         guard doc.session.state.text.contains("中**文**") else { throw Failure(message: "Source replacement unexpectedly matched across Markdown marks") }
         try await Task.sleep(for: .milliseconds(50))
         editor.undoManager?.undo()

@@ -15,6 +15,8 @@ import EasyMarkdownCore
 
     static func run(output: URL) async {
         var document: MarkdownDocument?
+        let accessibility = EditorStatisticsCheck.setAccessibilityTestingEnabled(true)
+        defer { EditorStatisticsCheck.setAccessibilityTestingEnabled(accessibility) }
         do {
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
             let expected = ProcessInfo.processInfo.environment["EASYMARKDOWN_EXPECTED_LANGUAGE"] ?? AppLanguage.launchChoice.rawValue
@@ -81,6 +83,10 @@ import EasyMarkdownCore
                 return (try? await web.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "Language Sample"
             }
             guard let web else { throw SmokeCheck.Failure(message: "No preview") }
+            try await wait("localized reader statistics") {
+                let statistics = DocumentStatistics(total: DocumentStatisticsIndex(source as NSString).total)
+                return EditorStatisticsCheck.statusBarLabel(in: root)?.contains(EditorStatusBar.totalLabel(statistics)) == true
+            }
             let copyTitle = try await web.evaluateJavaScript("document.querySelector('.code-copy-button')?.title") as? String
             guard copyTitle == L10n.text("复制代码"), doc.session.state.text == source else { throw SmokeCheck.Failure(message: "Preview UI localization changed content or missed copy labels") }
             doc.session.showSearch(); doc.session.search = "value"
@@ -97,6 +103,21 @@ import EasyMarkdownCore
                 return editor?.enclosingScrollView?.isFindBarVisible == true
             }
             guard let editor, let bar = editor.enclosingScrollView?.findBarView else { throw SmokeCheck.Failure(message: "Replace bar missing") }
+            let sampleStatistics = DocumentStatistics(total: .init(lineCount: 12, characterCount: 34),
+                                                      selection: .init(lineCount: 2, characterCount: 5))
+            let totalLabel = expected == "en" ? "Total lines: 12 · Characters: 34" : expected == "zh-Hant" ? "共 12 行 · 34 字元" : "共 12 行 · 34 字符"
+            let selectionLabel = expected == "en" ? "Selected lines: 2 · Characters: 5" : expected == "zh-Hant" ? "已選 2 行 · 5 字元" : "已选 2 行 · 5 字符"
+            let statisticsHelp = expected == "en" ? "Character counts exclude whitespace" : expected == "zh-Hant" ? "字元數不含空白字元" : "字符数不含空白字符"
+            guard EditorStatusBar.totalLabel(sampleStatistics) == totalLabel,
+                  EditorStatusBar.selectionLabel(sampleStatistics) == selectionLabel,
+                  L10n.text("字符数不含空白字符") == statisticsHelp else {
+                throw SmokeCheck.Failure(message: "底部统计文案未本地化")
+            }
+            editor.setSelectedRange((source as NSString).range(of: "Original document"))
+            try await wait("localized selection statistics") {
+                doc.session.editorStatistics.selection == TextStatistics(lineCount: 1, characterCount: 16) &&
+                    EditorStatisticsCheck.statusBarLabel(in: root)?.contains(statisticsHelp) == true
+            }
             let nativeTitles = descendants(bar).compactMap { $0 as? NSButton }.map(\.title)
             let replaceTitle = expected == "en" ? "Replace" : expected == "zh-Hant" ? "取代" : "替换"
             guard nativeTitles.contains(replaceTitle), nativeTitles.contains(expected == "en" ? "Done" : "完成") else {
@@ -149,7 +170,7 @@ import EasyMarkdownCore
             doc.updateChangeCount(.changeCleared); doc.close(); document = nil
             let report: [String: Any] = ["status":"passed", "choice":AppLanguage.launchChoice.rawValue,
                 "resolved":expected, "nativeReplace":nativeTitles, "saveButtons":buttons.map(\.title),
-                "checks":["settings", "preference persistence/reset", "menu and app strings", "preview copy labels", "search count", "native replace", "native save cancel preserves edits"]]
+                "checks":["settings", "preference persistence/reset", "menu and app strings", "preview copy labels", "search count", "native replace", "localized reader statistics", "localized editor statistics", "native save cancel preserves edits"]]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("report.json"))
             print("PASS: application and native UI in \(expected) (choice: \(AppLanguage.launchChoice.rawValue))")
             NSApp.terminate(nil)

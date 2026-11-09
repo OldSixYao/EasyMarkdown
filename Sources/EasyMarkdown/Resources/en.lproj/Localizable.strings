@@ -195,3 +195,6 @@
 "上一标签" = "Previous Tab";
 "下一标签" = "Next Tab";
 "将标签移到独立窗口" = "Move Tab to New Window";
+"共 %d 行 · %d 字符" = "Total lines: %d · Characters: %d";
+"已选 %d 行 · %d 字符" = "Selected lines: %d · Characters: %d";
+"字符数不含空白字符" = "Character counts exclude whitespace";

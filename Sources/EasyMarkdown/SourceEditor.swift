@@ -1,6 +1,17 @@
 import SwiftUI
 import EasyMarkdownCore
 
+/// NSTextView defers its selection notification until mouse-up during a drag.
+/// Observe the intermediate native ranges without changing selection behavior.
+@MainActor final class StatisticsTextView: NSTextView {
+    var selectionDidChange: (() -> Void)?
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        selectionDidChange?()
+    }
+}
+
 struct SourceEditor: NSViewRepresentable {
     let session: DocumentSession
     var isReadOnly = false
@@ -18,7 +29,7 @@ struct SourceEditor: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        let text = NSTextView(frame: .zero)
+        let text = StatisticsTextView(frame: .zero)
         text.isRichText = false
         text.allowsUndo = !isReadOnly
         text.isEditable = !isReadOnly && !session.isSaving
@@ -44,6 +55,8 @@ struct SourceEditor: NSViewRepresentable {
         text.setAccessibilityLabel(L10n.text(isReadOnly ? "文档内容" : "文档源码编辑器"))
         scroll.documentView = text
         context.coordinator.textView = text
+        text.selectionDidChange = { [weak coordinator = context.coordinator] in coordinator?.selectionDidChange() }
+        context.coordinator.observeStatistics()
         context.coordinator.observeScrolling(scroll)
         context.coordinator.updateLineNumbers(scroll, visible: showLineNumbers && !isReadOnly && !isSecondary && overrideText == nil)
         if !isSecondary && overrideText == nil {
@@ -116,6 +129,7 @@ struct SourceEditor: NSViewRepresentable {
         text.allowsUndo = !isReadOnly
         context.coordinator.updateLineNumbers(scroll, visible: showLineNumbers && !isReadOnly && !isSecondary && overrideText == nil)
         text.setAccessibilityLabel(L10n.text(isReadOnly ? "文档内容" : "文档源码编辑器"))
+        coordinator.scheduleStatistics()
         if !isSecondary && overrideText == nil && session.pendingEditorFind != nil {
             DispatchQueue.main.async { [weak coordinator = context.coordinator] in
                 coordinator?.session.flushEditorFindRequest()
@@ -132,11 +146,13 @@ struct SourceEditor: NSViewRepresentable {
         coordinator.scrollTask = nil
         coordinator.positionTask?.cancel()
         coordinator.positionTask = nil
+        coordinator.stopStatistics()
         if let observer = coordinator.scrollObserver {
             NotificationCenter.default.removeObserver(observer)
             coordinator.scrollObserver = nil
         }
         if let text = coordinator.textView {
+            (text as? StatisticsTextView)?.selectionDidChange = nil
             text.undoManager?.removeAllActions(withTarget: text)
             text.delegate = nil
         }
@@ -158,9 +174,18 @@ struct SourceEditor: NSViewRepresentable {
         var overrideText: String?
         private var pendingChange: TextChange?
         private var highlightedRange: NSRange?
+        private(set) var statisticsIndex: DocumentStatisticsIndex?
+        private var statisticsObserver: NSObjectProtocol?
+        private var statisticsRefresh: Timer?
+        private var statisticsDirty = true
+        private var statisticsSelection: [NSRange]?
+        private var statisticsMode: ViewMode?
+        private let statisticsID = UUID()
 
         deinit {
             if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+            if let statisticsObserver { NotificationCenter.default.removeObserver(statisticsObserver) }
+            statisticsRefresh?.invalidate()
         }
 
         init(session: DocumentSession, isSecondary: Bool = false, isOverride: Bool = false) {
@@ -169,6 +194,79 @@ struct SourceEditor: NSViewRepresentable {
             self.isOverride = isOverride
             appliedRevision = session.state.revision
         }
+
+        func observeStatistics() {
+            guard !isOverride, let textView else { return }
+            statisticsObserver = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification,
+                object: textView.textStorage, queue: .main) { [weak self] event in
+                    MainActor.assumeIsolated {
+                        guard let self, let storage = event.object as? NSTextStorage,
+                              storage.editedMask.contains(.editedCharacters) else { return }
+                        self.statisticsIndex?.applyEdit(in: storage.editedRange,
+                            lengthDelta: storage.changeInLength, text: storage.string as NSString)
+                        self.statisticsDirty = true
+                        self.scheduleStatistics()
+                    }
+                }
+            scheduleStatistics()
+        }
+
+        func scheduleStatistics() {
+            guard !isOverride, statisticsRefresh == nil else { return }
+            let refresh = Timer(timeInterval: 0, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.statisticsRefresh = nil
+                    self.refreshStatistics()
+                }
+            }
+            statisticsRefresh = refresh
+            // Publishing during an NSViewRepresentable update or text-storage
+            // processing can reenter SwiftUI/layout. Coalesce on the next turn.
+            // Common modes also run while AppKit tracks a mouse drag.
+            RunLoop.main.add(refresh, forMode: .common)
+        }
+
+        private func refreshStatistics() {
+            guard let textView, textView.delegate === self else { return }
+            if statisticsMode != session.mode { statisticsSelection = nil; statisticsMode = session.mode }
+            let ownsSelection = session.statisticsSelectionOwner == statisticsID || (!isSecondary && session.statisticsSelectionOwner == nil)
+            guard !isSecondary || ownsSelection else { return }
+            let source = textView.string as NSString
+            if statisticsIndex == nil {
+                statisticsIndex = DocumentStatisticsIndex(source)
+                statisticsDirty = true
+            }
+            let ranges = textView.selectedRanges.map(\.rangeValue)
+            guard statisticsDirty || statisticsSelection != ranges else { return }
+            guard let statistics = statisticsIndex?.statistics(in: source, selectedRanges: ranges) else { return }
+            statisticsSelection = ranges
+            statisticsDirty = false
+            if ownsSelection {
+                if session.editorStatistics != statistics { session.editorStatistics = statistics }
+            } else if session.editorStatistics.total != statistics.total {
+                session.editorStatistics.total = statistics.total
+            }
+        }
+
+        func stopStatistics() {
+            if let statisticsObserver { NotificationCenter.default.removeObserver(statisticsObserver) }
+            statisticsObserver = nil
+            statisticsRefresh?.invalidate()
+            statisticsRefresh = nil
+            statisticsIndex = nil
+        }
+
+        func selectionDidChange() {
+            guard !isOverride, !updatingText else { return }
+            session.statisticsSelectionOwner = statisticsID
+            // The same native ranges can become active again after selecting in
+            // another pane; force that ownership change to publish too.
+            statisticsSelection = nil
+            scheduleStatistics()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) { selectionDidChange() }
 
         func updateLineNumbers(_ scroll: NSScrollView, visible: Bool) {
             guard let text = textView else { return }
@@ -339,6 +437,7 @@ struct SourceEditor: NSViewRepresentable {
                 highlightedRange = NSRange(location: start, length: end - start)
             }
             session.edit(textView.string, change: pendingChange)
+            selectionDidChange()
             pendingChange = nil
             appliedRevision = session.state.revision
             scheduleHighlight()
@@ -387,32 +486,16 @@ struct SourceEditor: NSViewRepresentable {
             }
         }
 
-        private static func compile(_ rules: [(String, NSColor)]) -> [(NSRegularExpression, NSColor)] {
-            rules.map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
+        private static func color(for style: SourceHighlighting.Style) -> NSColor {
+            switch style {
+            case .key: return .systemGreen
+            case .string, .heading: return .systemBlue
+            case .literal: return .systemPurple
+            case .comment: return .secondaryLabelColor
+            case .code: return .systemOrange
+            case .link: return .systemTeal
+            }
         }
-        private static let markdownRules = compile([
-            (#"(?m)^#{1,6}\s.+$"#, .systemBlue),
-            (#"`[^`\n]+`"#, .systemOrange)
-        ])
-        private static let jsonRules = compile([
-            (#"\"(?:[^\"\\]|\\.)*\""#, .systemGreen),
-            (#"\b(?:true|false|null|-?\d+(?:\.\d+)?)\b"#, .systemPurple)
-        ])
-        private static let xmlRules = compile([
-            (#"</?[\w:.-]+|/?>"#, .systemBlue),
-            (#"\"[^\"]*\"|'[^']*'"#, .systemGreen),
-            (#"<!--[\s\S]*?-->"#, .secondaryLabelColor)
-        ])
-        private static let configurationRules = compile([
-            (#"(?m)^\s*(?:export[ \t]+)?[\w.\-]+(?=\s*[:=])"#, .systemBlue),
-            (#"(?m)^\s*\[[^\r\n]+\]"#, .systemBlue),
-            (#"\b(?:true|false|null|yes|no|on|off|\d+(?:\.\d+)?)\b"#, .systemPurple),
-            (#"\"(?:[^\"\\\r\n]|\\.)*\"|'[^'\r\n]*'"#, .systemGreen),
-            (#"(?m)^\s*[#;!][^\r\n]*$"#, .secondaryLabelColor)
-        ])
-        private static let jsoncRules = jsonRules + compile([
-            (#"(?m)^\s*//[^\r\n]*$|/\*[\s\S]*?\*/"#, .secondaryLabelColor)
-        ])
 
         func highlight() {
             guard let view = textView, !view.hasMarkedText(), let storage = view.textStorage,
@@ -428,19 +511,11 @@ struct SourceEditor: NSViewRepresentable {
             }
             guard (isOverride ? source.utf8.count : session.state.byteCount) < 200_000,
                   storage.length > 0 else { return }
-            let rules: [(NSRegularExpression, NSColor)]
-            switch session.kind {
-            case .markdown: rules = Self.markdownRules
-            case .json: rules = Self.jsonRules
-            case .xml: rules = Self.xmlRules
-            case .yaml, .toml, .ini, .configuration, .environment, .properties: rules = Self.configurationRules
-            case .jsonc: rules = Self.jsoncRules
-            case .text: return
-            }
+            guard session.kind != .text else { return }
             var range = entire
             if session.kind != .xml && session.kind != .jsonc {
-                // XML/JSONC block comments may begin outside the viewport.
-                // Other rules stay line-local around the visible text.
+                // Multiline lexical context is handled by SourceHighlighting;
+                // display attributes still stay near the visible text.
                 var visible = view.visibleRect.insetBy(dx: 0, dy: -250)
                 visible.origin.x -= view.textContainerInset.width
                 visible.origin.y -= view.textContainerInset.height
@@ -454,24 +529,8 @@ struct SourceEditor: NSViewRepresentable {
             // an unbounded scan. Long logical lines keep the default text color.
             let ranges = SourceHighlighting.boundedLineRanges(in: source as NSString, range: range)
             highlightedRange = range
-            let deadline = ProcessInfo.processInfo.systemUptime + 0.008
-            for (expression, color) in rules {
-                for range in ranges {
-                    guard ProcessInfo.processInfo.systemUptime < deadline else { return }
-                    expression.enumerateMatches(in: source, options: [.reportProgress], range: range) { match, _, stop in
-                        if ProcessInfo.processInfo.systemUptime >= deadline { stop.pointee = true; return }
-                        if let match {
-                            layout.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: match.range)
-                        }
-                    }
-                }
-            }
-            if session.kind == .markdown {
-                for range in ranges {
-                    for match in SourceHighlighting.markdownLinks(in: source as NSString, range: range) {
-                        layout.addTemporaryAttribute(.foregroundColor, value: NSColor.systemTeal, forCharacterRange: match)
-                    }
-                }
+            SourceHighlighting.enumerate(in: source, kind: session.kind, ranges: ranges) { range, style in
+                layout.addTemporaryAttribute(.foregroundColor, value: Self.color(for: style), forCharacterRange: range)
             }
         }
 

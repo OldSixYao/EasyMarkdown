@@ -49,6 +49,7 @@ struct DocumentView: View {
                     }
                 }
             }
+            EditorStatusBar(session: session)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .preferredColorScheme(appearance == "system" ? nil : appearance == "dark" ? .dark : .light)
@@ -74,6 +75,8 @@ struct DocumentView: View {
         }
         .onDrop(of: [.fileURL], isTargeted: nil, perform: acceptDrop)
         .onChange(of: session.showFind) { _, visible in searchFocused = visible }
+        .onChange(of: session.state.revision, initial: true) { _, _ in session.refreshReadingStatistics() }
+        .onChange(of: session.mode) { _, _ in session.refreshReadingStatistics() }
         .onAppear { DispatchQueue.main.async { session.updateWindowActivity() } }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { event in
             if let window = event.object as? NSWindow,

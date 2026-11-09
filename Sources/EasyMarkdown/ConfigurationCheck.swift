@@ -9,10 +9,12 @@ import SwiftUI
     static func run(output: URL) async {
         do {
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let highlightingChecks = try SourceHighlightingCheck.run()
+            try await SourceHighlightingCheck.capture(directory: output)
             try await documents(directory: output)
             try await associations()
             try await customExtensions(directory: output)
-            let report: [String: Any] = ["status": "passed", "configurationDocuments": 11, "defaultEditorFormats": 7, "customExtensionsAndRowStatus": true]
+            let report: [String: Any] = ["status": "passed", "highlightingChecks": highlightingChecks, "configurationDocuments": 11, "defaultEditorFormats": 7, "customExtensionsAndRowStatus": true]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("report.json"))
             print("PASS: 11 configuration documents, 7 default-editor formats, custom extensions and per-row status")

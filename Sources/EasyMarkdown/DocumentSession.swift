@@ -26,8 +26,18 @@ struct ReaderSearchResume {
 @MainActor @Observable
 final class DocumentSession {
     var state: DocumentState
+    var editorStatistics = DocumentStatistics()
+    @ObservationIgnored var statisticsSelectionOwner: UUID?
+    @ObservationIgnored private var readingStatisticsRevision: UInt64?
     var mode: ViewMode = .read {
-        didSet { previewActivity.update(active: isWindowActive, needed: kind == .markdown && mode != .edit) }
+        didSet {
+            if mode != oldValue {
+                statisticsSelectionOwner = nil
+                editorStatistics.selection = nil
+                readingStatisticsRevision = nil
+            }
+            previewActivity.update(active: isWindowActive, needed: kind == .markdown && mode != .edit)
+        }
     }
     let previewActivity = PreviewActivity()
     var showOutline = false
@@ -171,6 +181,21 @@ final class DocumentSession {
     var url: URL? { document?.fileURL }
     var kind: DocumentKind { DocumentKind(url: url) }
     var usesNativeReader: Bool { kind != .markdown }
+
+    func refreshReadingStatistics() {
+        guard mode == .read, !usesNativeReader, readingStatisticsRevision != state.revision else { return }
+        editorStatistics = DocumentStatistics(total: DocumentStatisticsIndex(state.text as NSString).total)
+        readingStatisticsRevision = state.revision
+    }
+
+    func updateReaderSelection(_ selectedText: String, owner: UUID) {
+        guard mode != .edit else { return }
+        let text = selectedText as NSString
+        var index = DocumentStatisticsIndex(text)
+        statisticsSelectionOwner = owner
+        editorStatistics.selection = index.statistics(in: text,
+            selectedRanges: [NSRange(location: 0, length: text.length)]).selection
+    }
 
     func setWindowActive(_ active: Bool) {
         guard !closed else { return }

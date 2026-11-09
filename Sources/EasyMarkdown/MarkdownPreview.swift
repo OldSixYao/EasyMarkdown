@@ -176,6 +176,7 @@ struct MarkdownPreview: NSViewRepresentable {
             resources.remoteImages = parent.remoteImages
             let preferences: [String: Any] = ["fontSize": parent.fontSize, "width": parent.width,
                 "appearance": parent.appearance, "remoteImages": parent.remoteImages,
+                "selectionStatistics": parent.overrideText == nil, "statisticsRevision": String(parent.session.state.revision),
                 "language": Bundle.main.preferredLocalizations.first ?? "zh-Hans",
                 "strings": ["copy": L10n.text("复制代码"), "copied": L10n.text("已复制"),
                     "copyFailed": L10n.text("复制失败"), "content": L10n.text("文档内容"),
@@ -324,6 +325,15 @@ struct MarkdownPreview: NSViewRepresentable {
                       let offset = payload["offset"] as? Double,
                       let progress = payload["progress"] as? Double else { return }
                 parent.session.previewDidScroll(SplitScrollPosition(offset: offset, progress: progress))
+            case "selection":
+                guard parent.overrideText == nil, parent.session.mode != .edit, contentIsCurrent,
+                      let payload = body["payload"] as? [String: Any],
+                      payload["revision"] as? String == String(parent.session.state.revision),
+                      let text = payload["text"] as? String,
+                      text.utf16.count <= PreviewText.maximumUTF16Count else { return }
+                guard !text.isEmpty || parent.session.statisticsSelectionOwner == activityID ||
+                        payload["interaction"] as? Bool == true else { return }
+                parent.session.updateReaderSelection(text, owner: activityID)
             case "link":
                 if let href = body["payload"] as? String { openLink(href) }
             case "imageRequest":

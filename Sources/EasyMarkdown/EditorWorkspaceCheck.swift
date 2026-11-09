@@ -23,7 +23,7 @@ import EasyMarkdownCore
             try await check(directory: output)
             try? FileManager.default.removeItem(at: output.appendingPathComponent("failure.txt"))
             try Data("passed".utf8).write(to: output.appendingPathComponent("result.txt"))
-            print("PASS: 编辑行号与原生文档标签检查")
+            print("PASS: 编辑行号、底部统计与原生文档标签检查")
             NSApp.terminate(nil)
         } catch {
             try? Data(error.localizedDescription.utf8).write(to: output.appendingPathComponent("failure.txt"))
@@ -35,6 +35,7 @@ import EasyMarkdownCore
 
     static func check(directory: URL) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try await EditorStatisticsCheck.check(directory: directory.appendingPathComponent("statistics"))
         let preferences = EditorPreferences.store
         let originalLines = preferences.bool(forKey: EditorPreferences.showLineNumbers)
         let originalTabs = preferences.bool(forKey: EditorPreferences.documentTabsEnabled)
@@ -295,6 +296,10 @@ import EasyMarkdownCore
         scroll.documentView = text
         let coordinator = SourceEditor.Coordinator(session: document.session)
         coordinator.textView = text
+        document.session.mode = .edit
+        text.delegate = coordinator
+        coordinator.observeStatistics()
+        defer { coordinator.stopStatistics() }
         coordinator.updateLineNumbers(scroll, visible: true)
         weak var reference = scroll.verticalRulerView as? LineNumberRulerView
         guard reference?.visibleLabels().first?.number == 1,
@@ -305,6 +310,26 @@ import EasyMarkdownCore
         _ = reference?.visibleLabels()
         guard text.layoutManager!.firstUnlaidCharacterIndex() < text.textStorage!.length / 2 else {
             throw failure("缩放行号强制排版了整份大文件")
+        }
+        try await wait("大文件统计首次建立") { coordinator.statisticsIndex != nil }
+        let unlaid = text.layoutManager!.firstUnlaidCharacterIndex()
+        for _ in 0..<20 {
+            // Exercise storage edits without NSTextView's insertText frame-size
+            // adjustment, so this probe isolates layout requested by statistics.
+            text.textStorage!.replaceCharacters(in: NSRange(location: 0, length: 0), with: "字")
+        }
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: text))
+        // Keep the native caret in the viewport: moving it to the end itself
+        // asks TextKit to lay out through that position, independently of stats.
+        text.setSelectedRange(NSRange(location: 40, length: 20))
+        try await wait("大文件连续编辑和选区统计") {
+            document.session.editorStatistics.total.characterCount == 800_020 && document.session.editorStatistics.selection != nil
+        }
+        guard coordinator.statisticsIndex?.rebuildCount == 1,
+              (coordinator.statisticsIndex?.lastScannedUTF16Count ?? .max) < 20_000,
+              (coordinator.statisticsIndex?.lastSelectionScannedUTF16Count ?? .max) < 12_288,
+              text.layoutManager!.firstUnlaidCharacterIndex() <= max(unlaid, 20_000) else {
+            throw failure("大文件统计重复扫描全文或触发全文排版：rebuild=\(coordinator.statisticsIndex?.rebuildCount ?? -1) scan=\(coordinator.statisticsIndex?.lastScannedUTF16Count ?? -1) selection=\(coordinator.statisticsIndex?.lastSelectionScannedUTF16Count ?? -1) unlaid=\(unlaid)→\(text.layoutManager!.firstUnlaidCharacterIndex())")
         }
         text.string = ""
         guard reference?.visibleLabels().map(\.number) == [1] else { throw failure("空文档未显示第 1 行") }
