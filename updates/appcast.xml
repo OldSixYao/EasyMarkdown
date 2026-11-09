@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>EasyMarkdown</title>
         <item>
+            <title>0.1.33</title>
+            <pubDate>Mon, 09 Nov 2026 20:15:15 +0800</pubDate>
+            <link>https://github.com/OldSixYao/EasyMarkdown</link>
+            <sparkle:version>34</sparkle:version>
+            <sparkle:shortVersionString>0.1.33</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<ul><li>文档底部状态栏改为在阅读、源码编辑和分栏模式下常驻显示全文总行数与字符数，外部内容刷新后同步更新。</li><li>原生文本视图在鼠标拖选过程中持续更新已选行数和字符数，更新在鼠标跟踪运行循环中生效，无需等待松开鼠标；键盘扩选与取消选择同步更新。</li><li>排版阅读新增可见文字选区统计，分栏中的选区统计跟随当前操作窗格；全文保持原文统计口径，字符数仍排除空白。</li><li>切换模式清理旧选区，外部版本预览继续独立；补充阅读选区、分栏切换和拖选期间实际状态栏文字的窗口检查。</li></ul>]]></description>
+            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.33/EasyMarkdown-0.1.33-arm64.dmg" length="2757717" type="application/octet-stream" sparkle:edSignature="N5mQ8lCkRjzHYPxfKhiLRqSeODrbh1x7m+s74VRJw82f7oYgMUQCY1yUxMTUptgwjWHkk9mrvPIpBOsle84FCA=="/>
+        </item>
+        <item>
             <title>0.1.27</title>
             <pubDate>Mon, 09 Nov 2026 15:43:16 +0800</pubDate>
             <link>https://github.com/OldSixYao/EasyMarkdown</link>
@@ -30,6 +41,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ZsgroGX64dVcP9IkSRIH/F3m96DGbYR0EE09NbW3AeTht2Sx1gKvSquFvc8V+SBcImSuvMek8Wr5xkUjiSEdDg==
-length: 3608
+edSignature: xWU9GtEH3dGdBZxNAA15XBkuxsSxXwmtRq1rF1DKWAIrzJkA/vuYMnlZYyuRZ8P8hxWHT+4z8jZ+YQKG+clNBQ==
+length: 5122
 -->
