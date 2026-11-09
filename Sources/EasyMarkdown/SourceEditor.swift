@@ -8,6 +8,7 @@ struct SourceEditor: NSViewRepresentable {
     var overrideText: String? = nil
     @AppStorage("editorFontSize") private var fontSize = 14.0
     @AppStorage("readerFontSize") private var readerFontSize = 16.0
+    @AppStorage(EditorPreferences.showLineNumbers, store: EditorPreferences.store) private var showLineNumbers = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(session: session, isSecondary: isSecondary, isOverride: overrideText != nil)
@@ -44,6 +45,7 @@ struct SourceEditor: NSViewRepresentable {
         scroll.documentView = text
         context.coordinator.textView = text
         context.coordinator.observeScrolling(scroll)
+        context.coordinator.updateLineNumbers(scroll, visible: showLineNumbers && !isReadOnly && !isSecondary && overrideText == nil)
         if !isSecondary && overrideText == nil {
         session.applyMarkdown = { [weak coordinator = context.coordinator] command in
             coordinator?.apply(command)
@@ -63,7 +65,7 @@ struct SourceEditor: NSViewRepresentable {
         DispatchQueue.main.async { [weak text, weak coordinator = context.coordinator] in
             guard let text else { return }
             if coordinator?.isSecondary == false && coordinator?.isOverride == false {
-                text.window?.makeFirstResponder(text)
+                if text.window?.isKeyWindow == true { text.window?.makeFirstResponder(text) }
                 if coordinator?.session.usesNativeReader == true,
                    let position = coordinator?.session.savedSourcePosition() {
                     coordinator?.scroll(to: position)
@@ -112,6 +114,7 @@ struct SourceEditor: NSViewRepresentable {
         }
         text.isEditable = !isReadOnly && !session.isSaving
         text.allowsUndo = !isReadOnly
+        context.coordinator.updateLineNumbers(scroll, visible: showLineNumbers && !isReadOnly && !isSecondary && overrideText == nil)
         text.setAccessibilityLabel(L10n.text(isReadOnly ? "文档内容" : "文档源码编辑器"))
         if !isSecondary && overrideText == nil && session.pendingEditorFind != nil {
             DispatchQueue.main.async { [weak coordinator = context.coordinator] in
@@ -121,6 +124,8 @@ struct SourceEditor: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        (scroll.verticalRulerView as? LineNumberRulerView)?.invalidate()
+        scroll.verticalRulerView = nil
         coordinator.highlightTask?.cancel()
         coordinator.highlightTask = nil
         coordinator.scrollTask?.cancel()
@@ -163,6 +168,37 @@ struct SourceEditor: NSViewRepresentable {
             self.isSecondary = isSecondary
             self.isOverride = isOverride
             appliedRevision = session.state.revision
+        }
+
+        func updateLineNumbers(_ scroll: NSScrollView, visible: Bool) {
+            guard let text = textView else { return }
+            let existing = scroll.verticalRulerView as? LineNumberRulerView
+            guard visible || existing != nil else { return }
+            let changesWidth = visible != (existing != nil) || (visible && existing?.desiredThickness != existing?.ruleThickness)
+            let anchor = changesWidth && !text.hasMarkedText() && text.window != nil ? scrollPosition() : nil
+            if visible {
+                let ruler = existing ?? LineNumberRulerView(scrollView: scroll, textView: text)
+                if existing == nil {
+                    scroll.verticalRulerView = ruler
+                    scroll.hasVerticalRuler = true
+                    scroll.hasHorizontalRuler = false
+                    scroll.rulersVisible = true
+                    ruler.metricsDidChange = { [weak self, weak scroll] in
+                        guard let scroll else { return }
+                        self?.updateLineNumbers(scroll, visible: true)
+                    }
+                }
+                ruler.refreshMetrics()
+            } else {
+                existing?.invalidate()
+                scroll.rulersVisible = false
+                scroll.hasVerticalRuler = false
+                scroll.verticalRulerView = nil
+            }
+            if let anchor {
+                scroll.tile()
+                self.scroll(to: anchor)
+            }
         }
 
         func performFind(_ request: EditorFindRequest) -> Bool {
@@ -224,6 +260,7 @@ struct SourceEditor: NSViewRepresentable {
         }
 
         private func didScroll() {
+            (textView?.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.needsDisplay = true
             scheduleHighlight()
             if !isSecondary && !isOverride && session.usesNativeReader {
                 positionTask?.cancel()

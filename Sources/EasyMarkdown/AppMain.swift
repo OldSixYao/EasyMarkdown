@@ -6,6 +6,7 @@ import EasyMarkdownCore
 @main
 struct EasyMarkdownMain {
     @MainActor static func main() {
+        EditorPreferences.registerDefaults()
         AppLanguage.configureAtLaunch()
         let app = NSApplication.shared
         let delegate = AppDelegate()
@@ -29,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSApp.applicationIconImage = NSImage(contentsOf: icon)
         }
         buildMenu()
+        DocumentTabCoordinator.shared.start()
         NSDocumentController.shared.autosavingDelay = 0
         if let path = ProcessInfo.processInfo.environment["EASYMARKDOWN_MEMORY_CHECK"] {
             Task {
@@ -41,6 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--editor-workspace-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await EditorWorkspaceCheck.run(output: output) }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--lightweight-test"),
            CommandLine.arguments.indices.contains(index + 1) {
             let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
@@ -160,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "EasyMarkdown"
+        window.tabbingMode = .disallowed
         window.titlebarAppearsTransparent = true
         let hosting = NSHostingController(rootView: WelcomeView())
         // Let the window own its size; SwiftUI's compressed fitting size is too narrow.
@@ -177,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 300),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = L10n.text("设置")
+        window.tabbingMode = .disallowed
         let hosting = NSHostingController(rootView: SettingsView(updates: updates))
         hosting.sizingOptions = []
         window.contentViewController = hosting
@@ -247,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let file = submenu(L10n.text("文件"))
         item(file, L10n.text("打开…"), #selector(openPanel(_:)), "o", self)
+        item(file, L10n.text("新建标签…"), #selector(DocumentTabCoordinator.newTab(_:)), "", DocumentTabCoordinator.shared)
         let recent = NSMenuItem(title: L10n.text("最近使用"), action: nil, keyEquivalent: "")
         recentMenu = NSMenu(title: L10n.text("最近使用")); recentMenu.delegate = self; recent.submenu = recentMenu
         file.addItem(recent)
@@ -276,6 +287,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let window = submenu(L10n.text("窗口"))
         item(window, L10n.text("最小化"), #selector(NSWindow.performMiniaturize(_:)), "m")
         item(window, L10n.text("缩放"), #selector(NSWindow.performZoom(_:)))
+        window.addItem(.separator())
+        let previous = item(window, L10n.text("上一标签"), #selector(DocumentTabCoordinator.previousTab(_:)), "\t", DocumentTabCoordinator.shared)
+        previous.keyEquivalentModifierMask = [.control, .shift]
+        let next = item(window, L10n.text("下一标签"), #selector(DocumentTabCoordinator.nextTab(_:)), "\t", DocumentTabCoordinator.shared)
+        next.keyEquivalentModifierMask = [.control]
+        item(window, L10n.text("将标签移到独立窗口"), #selector(DocumentTabCoordinator.moveTabToNewWindow(_:)), "", DocumentTabCoordinator.shared)
         NSApp.windowsMenu = window
         NSApp.mainMenu = main
     }
@@ -326,6 +343,8 @@ private struct SettingsView: View {
     @AppStorage("readerWidth") var width = 780.0
     @AppStorage("remoteImages") var remoteImages = false
     @AppStorage("appearance") var appearance = "system"
+    @AppStorage(EditorPreferences.showLineNumbers, store: EditorPreferences.store) private var showLineNumbers = true
+    @AppStorage(EditorPreferences.documentTabsEnabled, store: EditorPreferences.store) private var documentTabsEnabled = true
 
     var body: some View {
         Form {
@@ -351,6 +370,11 @@ private struct SettingsView: View {
             }
             Stepper(L10n.format("阅读字号：%d", Int(fontSize)), value: $fontSize, in: 12...26)
             Stepper(L10n.format("编辑字号：%d", Int(editorSize)), value: $editorSize, in: 11...24)
+            Toggle(L10n.text("显示行号"), isOn: $showLineNumbers)
+                .accessibilityIdentifier("show-line-numbers")
+            Toggle(L10n.text("启用文档标签管理"), isOn: $documentTabsEnabled)
+                .accessibilityIdentifier("document-tabs-enabled")
+                .onChange(of: documentTabsEnabled) { _, _ in DocumentTabCoordinator.shared.applyPreference() }
             Picker(L10n.text("阅读宽度"), selection: $width) {
                 Text(L10n.text("紧凑")).tag(660.0); Text(L10n.text("适中")).tag(780.0); Text(L10n.text("宽松")).tag(980.0)
             }

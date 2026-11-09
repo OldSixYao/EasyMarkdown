@@ -189,3 +189,9 @@
 "无法启动更新检查：%@" = "Unable to start the updater: %@";
 "请使用完整的 EasyMarkdown 应用包检查更新。" = "Please use the complete EasyMarkdown application bundle to check for updates.";
 "请先将 EasyMarkdown 拖入“应用程序”，退出后从“应用程序”重新打开，再检查更新。" = "Drag EasyMarkdown into Applications, quit, and reopen it from Applications before checking for updates.";
+"显示行号" = "Show line numbers";
+"启用文档标签管理" = "Enable document tabs";
+"新建标签…" = "New Tab…";
+"上一标签" = "Previous Tab";
+"下一标签" = "Next Tab";
+"将标签移到独立窗口" = "Move Tab to New Window";

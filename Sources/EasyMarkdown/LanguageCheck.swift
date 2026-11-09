@@ -23,6 +23,12 @@ import EasyMarkdownCore
             }
             let sample = expected == "en" ? "Settings" : expected == "zh-Hant" ? "設定" : "设置"
             guard L10n.text("设置") == sample else { throw SmokeCheck.Failure(message: "Application strings do not match native language") }
+            let lineNumbers = expected == "en" ? "Show line numbers" : expected == "zh-Hant" ? "顯示行號" : "显示行号"
+            let documentTabs = expected == "en" ? "Enable document tabs" : expected == "zh-Hant" ? "啟用文件標籤管理" : "启用文档标签管理"
+            guard L10n.text("显示行号") == lineNumbers, L10n.text("启用文档标签管理") == documentTabs,
+                  NSApp.mainMenu?.items.contains(where: { item in
+                      item.submenu?.items.contains(where: { $0.title == L10n.text("下一标签") }) == true
+                  }) == true else { throw SmokeCheck.Failure(message: "行号设置或标签菜单未本地化") }
             let updateTitle = expected == "en" ? "Check for Updates…" : expected == "zh-Hant" ? "檢查更新…" : "检查更新…"
             guard let application = NSApp.delegate as? AppDelegate,
                   let updateItem = NSApp.mainMenu?.items.first?.submenu?.items.first(where: { $0.title == updateTitle }),

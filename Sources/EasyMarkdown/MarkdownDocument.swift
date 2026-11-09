@@ -7,6 +7,18 @@ import UniformTypeIdentifiers
 final class MarkdownDocument: NSDocument {
     let session: DocumentSession
 
+    override var fileURL: URL? {
+        didSet {
+            Task { @MainActor [weak self] in self?.updateTabMetadata() }
+        }
+    }
+
+    private func updateTabMetadata() {
+        for controller in windowControllers {
+            controller.window?.tab.toolTip = fileURL?.path ?? displayName
+        }
+    }
+
     init(snapshot: FileSnapshot, url: URL) {
         session = DocumentSession(snapshot: snapshot)
         super.init()
@@ -44,7 +56,7 @@ final class MarkdownDocument: NSDocument {
     }
 
     override func makeWindowControllers() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 760),
+        let window = DocumentWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         window.titlebarAppearsTransparent = true
@@ -56,7 +68,17 @@ final class MarkdownDocument: NSDocument {
         window.setContentSize(NSSize(width: 980, height: 760))
         window.center()
         addWindowController(NSWindowController(window: window))
+        window.isDocumentEdited = session.state.isDirty
+        window.tab.toolTip = fileURL?.path ?? displayName
+        DocumentTabCoordinator.shared.register(window)
         session.start()
+    }
+
+    override func showWindows() {
+        let windows = windowControllers.compactMap(\.window)
+        for window in windows { DocumentTabCoordinator.shared.prepareToShow(window) }
+        super.showWindows()
+        for window in windows { DocumentTabCoordinator.shared.didShow(window) }
     }
 
     override func save(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType,
@@ -97,6 +119,7 @@ final class MarkdownDocument: NSDocument {
         session.stop(discardDraft: true)
         undoManager?.removeAllActions()
         let windows = windowControllers.compactMap(\.window)
+        for window in windows { DocumentTabCoordinator.shared.unregister(window) }
         super.close()
         // AppKit can retain a closed window; it must not retain the entire document UI.
         for window in windows { window.contentView = nil }

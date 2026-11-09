@@ -338,6 +338,11 @@ final class DocumentSession {
         guard let document else { return }
         document.updateUndoLimit(forByteCount: state.byteCount)
         document.updateChangeCount(state.isDirty ? .changeDone : .changeCleared)
+        // NSDocument's counter is independent of the authoritative buffer baseline.
+        // Native tabs read NSWindow's edited flag for their unsaved indicator.
+        for controller in document.windowControllers {
+            controller.window?.isDocumentEdited = state.isDirty
+        }
     }
 
     private func scheduleDraft() {

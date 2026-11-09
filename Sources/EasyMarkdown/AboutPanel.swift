@@ -36,5 +36,8 @@ import AppKit
 
     static func show() {
         NSApp.orderFrontStandardAboutPanel(options: options())
+        for window in NSApp.windows where window.windowController?.document == nil {
+            window.tabbingMode = .disallowed
+        }
     }
 }

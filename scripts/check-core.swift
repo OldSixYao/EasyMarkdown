@@ -77,6 +77,10 @@ func XCTFail(_ message: String, file: StaticString = #file, line: UInt = #line) 
         try performance.testRandomEditsAgreeWithFullComparison()
         try performance.testSaveDoesNotInvalidateUnchangedEditorRevision()
         performance.testPreviewBudgetHandlesEmojiAndLongCombiningSequences()
-        print("PASS: 35 core checks — file safety, configuration round trips, formatting, Markdown commands, image loading and incremental Unicode state")
+        let lines = LineNumberTests()
+        lines.testEmptyTrailingAndUnicodeLinesMatchNativeText()
+        lines.testEditsAcrossCRLFAndCheckpointBoundaries()
+        lines.testLargeEditsStaySparseAndLocal()
+        print("PASS: 38 core checks — file safety, configuration round trips, formatting, Markdown commands, image loading, incremental Unicode state and line numbers")
     }
 }

@@ -57,6 +57,8 @@ import EasyMarkdownCore
             }
             welcome.close()
             results.append("Welcome opens at 720 × 560 with a 640 × 520 minimum and supports resizing")
+            try await EditorWorkspaceCheck.check(directory: output.appendingPathComponent("editor-workspace"))
+            results.append("编辑行号按逻辑行显示并保留输入、撤销和局部排版；原生标签支持即时合并、拆分和关闭取消")
             let url = output.appendingPathComponent("自动刷新 测试.md")
             let source = ("# First heading\n\nOriginal content\n\n[Reference link][guide]\n\n[guide]: https://example.com\n\n| 文档 | 状态 |\n| --- | --- |\n| Markdown | 可阅读 |\n\n- [x] 支持任务\n\n" +
                 (1...50).map { "## Section \($0)\n\nParagraph \($0) 文档 📝\n\n" }.joined())
