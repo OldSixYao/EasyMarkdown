@@ -1,8 +1,21 @@
-<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+<?xml version="1.0" standalone="yes"?>
+<!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
---><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+-->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>EasyMarkdown</title>
+        <item>
+            <title>0.1.27</title>
+            <pubDate>Mon, 09 Nov 2026 15:43:16 +0800</pubDate>
+            <link>https://github.com/OldSixYao/EasyMarkdown</link>
+            <sparkle:version>28</sparkle:version>
+            <sparkle:shortVersionString>0.1.27</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<ul><li>编辑状态按内容修订号和实际编辑区间更新，缓存未保存状态与字节数，减少大文档输入和滚动时的重复全文比较。</li><li>统一预览长度限制，覆盖组合表情和超长组合字符；改进多处修改的内容块复用，并分离样式更新与正文解析。</li><li>合并同目录文件监听和重复刷新，过滤无关目录事件，降低后台补偿轮询频率。</li><li>草稿基线独立保存，当前内容原子写入，兼容旧草稿，并为持续输入保留定期恢复点。</li><li>增加图片总量预算和视口资源管理，减少多图及后台窗口的常驻占用。</li><li>纯文本与配置文件使用原生只读视图，文档标记阅读视图支持后台休眠和状态恢复。</li><li>补充编辑、预览、草稿、图片和窗口生命周期回归及前后性能对照。</li></ul>]]></description>
+            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.27/EasyMarkdown-0.1.27-arm64.dmg" length="2549051" type="application/octet-stream" sparkle:edSignature="8GOlJIbol7waJfOOUR7T2fuEYFddB7Oc0WDQLxGOP0f5YLKb4UNtbI7lPyVGrexzalid5XGXtkmPjUMVEPY2AQ=="/>
+        </item>
         <item>
             <title>0.1.24</title>
             <pubDate>Fri, 06 Nov 2026 11:20:08 +0800</pubDate>
@@ -12,10 +25,11 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description><![CDATA[<ul><li>应用菜单和设置新增“检查更新…”，支持查看更新说明、确认下载、安装和重新启动，共用同一更新状态。</li><li>默认每天自动检查一次，可在设置中关闭；下载和安装由用户确认，安装退出保留未保存文档的保存、放弃和取消流程。</li><li>接入 Sparkle 2.10.1，更新源和安装包使用独立密钥签名，解压前验证；只读磁盘映像和裸可执行文件显示安装说明。</li><li>增加可重复使用的磁盘映像打包、更新源签名及隔离升级验证流程，提供简体中文、繁体中文和英文更新入口。</li></ul>]]></description>
-            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.24/EasyMarkdown-0.1.24-arm64.dmg" length="2717602" type="application/octet-stream" sparkle:edSignature="Mmd9DBYNKaWIJU1BUHNXGsKRGltIJkd/1klnHBrbsM7y9P3QO2zRUiM1ZNYEYsBkdZm9k86HpClfBjVRyAYPBg=="></enclosure>
+            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.24/EasyMarkdown-0.1.24-arm64.dmg" length="2717602" type="application/octet-stream" sparkle:edSignature="Mmd9DBYNKaWIJU1BUHNXGsKRGltIJkd/1klnHBrbsM7y9P3QO2zRUiM1ZNYEYsBkdZm9k86HpClfBjVRyAYPBg=="/>
         </item>
     </channel>
-</rss><!-- sparkle-signatures:
-edSignature: OdX+u6n9jN/OvRmk8O45wv6MRIFj/PR6KUEYecS2CgQh0WKy0gNAM5eScm/1bqSdqFhyiiayCDVnwVA8Nz+sDA==
-length: 1910
+</rss>
+<!-- sparkle-signatures:
+edSignature: ZsgroGX64dVcP9IkSRIH/F3m96DGbYR0EE09NbW3AeTht2Sx1gKvSquFvc8V+SBcImSuvMek8Wr5xkUjiSEdDg==
+length: 3608
 -->
