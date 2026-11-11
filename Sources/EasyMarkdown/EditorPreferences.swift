@@ -7,7 +7,7 @@ import Foundation
     // Real-window checks use a disposable domain for these preferences.
     private static let checkSuite: String? = {
         #if DEBUG
-        let checks = ["--smoke-test", "--language-test", "--configuration-test", "--lightweight-test", "--editor-workspace-test"]
+        let checks = ["--smoke-test", "--language-test", "--configuration-test", "--lightweight-test", "--editor-workspace-test", "--external-change-test"]
         if CommandLine.arguments.contains(where: checks.contains) {
             return "app.easymarkdown.editor-check.\(UUID().uuidString)"
         }

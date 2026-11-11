@@ -107,7 +107,8 @@ import EasyMarkdownCore
         try require(reads == documents.map { $0.session.reloadReadCount }, "Unrelated directory event reread documents")
         let changed = "# changed externally\n"
         try Data(changed.utf8).write(to: documents[1].fileURL!, options: .atomic)
-        try await wait("targeted atomic replacement") { documents[1].session.state.text == changed }
+        try await wait("targeted atomic replacement") { documents[1].session.state.external?.text == changed }
+        try require(documents[1].session.state.text == "# monitor 1\n", "未确认的外部修改替换了正文")
         try require(documents[0].session.reloadReadCount == reads[0] && documents[2].session.reloadReadCount == reads[2],
                     "Targeted change reread siblings")
         let beforeForce = documents[0].session.reloadReadCount

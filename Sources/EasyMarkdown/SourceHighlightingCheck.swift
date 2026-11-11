@@ -117,8 +117,15 @@ import EasyMarkdownCore
             Fixture(name: "text.xml", source: "<?xml version=\"1.0\"?><root>don't change \"true 2.6\" <child value='2.6'/> text</root>",
                 expected: [("<?xml", .systemGreen), ("version", .systemGreen), ("value", .systemGreen), ("\"1.0\"", .systemBlue), ("don't", .systemBlue),
                            ("\"true 2.6\"", .systemBlue), ("<child", .systemGreen), ("'2.6'", .systemBlue), ("/>", .systemGreen)]),
+            Fixture(name: "attributes.xml", source: "<root first=\"true > 42\" second='false'><child value=\"text\"/></root>",
+                expected: [("<root", .systemGreen), ("first", .systemGreen), ("\"true > 42\"", .systemBlue),
+                           ("second", .systemGreen), ("'false'", .systemBlue), ("<child", .systemGreen),
+                           ("value", .systemGreen), ("\"text\"", .systemBlue), ("/>", .systemGreen), ("</root>", .systemGreen)]),
             Fixture(name: "code.md", source: "# Heading `[中文📝](https://example.com/2.6)`\n\n[link](https://example.com)\n",
                 expected: [("# Heading ", .systemBlue), ("`[中文📝](https://example.com/2.6)`", .systemOrange), ("[link](https://example.com)", .systemTeal)]),
+            Fixture(name: "heading-links.md", source: "# 前文 [链接](https://example.com) 后文 `[代码](url)` <!-- [注释](url) -->\n",
+                expected: [("# 前文 ", .systemBlue), ("[链接](https://example.com)", .systemTeal), (" 后文 ", .systemBlue),
+                           ("`[代码](url)`", .systemOrange), ("<!-- [注释](url) -->", .secondaryLabelColor)]),
             Fixture(name: "fences.md", source: "````text\n# heading [link](url)\n```\n````\n\n~~~text\n[other](url)\n~~~\n\n<!-- [comment](url) -->\n",
                 expected: [("````text\n# heading [link](url)\n```\n````", .systemOrange),
                            ("~~~text\n[other](url)\n~~~", .systemOrange), ("<!-- [comment](url) -->", .secondaryLabelColor)]),
@@ -134,8 +141,28 @@ import EasyMarkdownCore
             try check(fixture)
             // The same lexer serves native reading and the split preview.
             try check(fixture, isSecondary: true)
+            // 快照重放与即时着色接受同一组逐码元颜色断言，覆盖重叠样式的优先级。
+            try check(fixture, useSnapshot: true)
         }
-        return fixtures.count * 2 + (try clippedMultilineTokens()) + (try boundedWork())
+        return fixtures.count * 3 + (try clippedMultilineTokens()) + (try boundedWork()) + (try snapshotBounds())
+    }
+
+    private static func snapshotBounds() throws -> Int {
+        for source in [String(repeating: "x", count: 200_000), String(repeating: "中", count: 66_667)] {
+            guard SourceHighlighting.snapshot(in: source, kind: .json) == nil else {
+                throw SmokeCheck.Failure(message: "达到字节上限的正文仍生成了高亮快照")
+            }
+        }
+        let source = "{\"key\":true}"
+        var emitted = false
+        let completed = SourceHighlighting.enumerate(in: source, kind: .json,
+            ranges: [NSRange(location: 0, length: source.utf16.count)], timeBudget: 0) { _, _ in
+                emitted = true
+            }
+        guard !completed, !emitted else {
+            throw SmokeCheck.Failure(message: "零预算的高亮扫描未及时停止或被误报为完成")
+        }
+        return 3
     }
 
     private static func clippedMultilineTokens() throws -> Int {
@@ -225,7 +252,7 @@ import EasyMarkdownCore
         }
     }
 
-    private static func check(_ fixture: Fixture, isSecondary: Bool = false) throws {
+    private static func check(_ fixture: Fixture, isSecondary: Bool = false, useSnapshot: Bool = false) throws {
         let document = MarkdownDocument(snapshot: try FileSnapshot(data: Data(fixture.source.utf8)),
             url: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(fixture.name))
         defer { document.close() }
@@ -237,17 +264,40 @@ import EasyMarkdownCore
         text.string = fixture.source
         scroll.documentView = text
         let coordinator = SourceEditor.Coordinator(session: document.session, isSecondary: isSecondary)
+        defer { coordinator.invalidateHighlighting() }
         coordinator.textView = text
         text.layoutManager?.ensureLayout(for: text.textContainer!)
         let original = NSAttributedString(attributedString: text.textStorage!)
-        coordinator.highlight()
+        if useSnapshot {
+            guard let snapshot = SourceHighlighting.snapshot(in: fixture.source, kind: document.session.kind) else {
+                throw SmokeCheck.Failure(message: "短文档未能生成完整高亮快照：\(fixture.name)")
+            }
+            let entire = NSRange(location: 0, length: text.textStorage!.length)
+            for token in snapshot {
+                guard token.range.length > 0, NSIntersectionRange(token.range, entire) == token.range else {
+                    throw SmokeCheck.Failure(message: "高亮快照包含越界或空范围：\(fixture.name)")
+                }
+                let color: NSColor
+                switch token.style {
+                case .key: color = .systemGreen
+                case .string, .heading: color = .systemBlue
+                case .literal: color = .systemPurple
+                case .comment: color = .secondaryLabelColor
+                case .code: color = .systemOrange
+                case .link: color = .systemTeal
+                }
+                text.layoutManager?.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: token.range)
+            }
+        } else {
+            coordinator.highlight()
+        }
         func checkToken(_ token: String, _ expected: NSColor?, options: NSString.CompareOptions = []) throws {
             let range = (text.string as NSString).range(of: token, options: options)
             guard range.location != NSNotFound else { throw SmokeCheck.Failure(message: "高亮测试缺少样例：\(fixture.name) \(token)") }
             for index in range.location..<NSMaxRange(range) {
                 let actual = text.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: index, effectiveRange: nil) as? NSColor
                 guard actual == expected else {
-                    throw SmokeCheck.Failure(message: "高亮颜色不符：\(fixture.name)，\(token)，位置 \(index)，实际 \(String(describing: actual))，预期 \(String(describing: expected))")
+                    throw SmokeCheck.Failure(message: "\(useSnapshot ? "快照" : "即时")高亮颜色不符：\(fixture.name)，\(token)，位置 \(index)，实际 \(String(describing: actual))，预期 \(String(describing: expected))")
                 }
             }
         }

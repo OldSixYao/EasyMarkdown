@@ -35,6 +35,7 @@ import EasyMarkdownCore
 
     static func check(directory: URL) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try await EditorPositionCheck.check(directory: directory.appendingPathComponent("positions"))
         try await EditorStatisticsCheck.check(directory: directory.appendingPathComponent("statistics"))
         let preferences = EditorPreferences.store
         let originalLines = preferences.bool(forKey: EditorPreferences.showLineNumbers)

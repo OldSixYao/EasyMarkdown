@@ -7,12 +7,16 @@ import XCTest
 final class DocumentStateTests: XCTestCase {
     private func snapshot(_ text: String) throws -> FileSnapshot { try FileSnapshot(data: Data(text.utf8)) }
 
-    func testCleanDocumentFollowsExternalChanges() throws {
+    func testCleanDocumentWaitsForExternalConfirmation() throws {
         var state = DocumentState(snapshot: try snapshot("before"))
         state.receive(try snapshot("after"))
-        XCTAssertEqual(state.text, "after")
+        XCTAssertEqual(state.text, "before")
+        XCTAssertEqual(state.baseline.text, "before")
+        XCTAssertEqual(state.external?.text, "after")
         XCTAssertFalse(state.isDirty)
-        XCTAssertFalse(state.hasConflict)
+        XCTAssertTrue(state.hasConflict)
+        XCTAssertTrue(state.needsExternalConfirmation)
+        XCTAssertEqual(state.revision, 0)
     }
 
     func testExternalChangesNeverOverwriteUnsavedBuffer() throws {
@@ -37,10 +41,81 @@ final class DocumentStateTests: XCTestCase {
         XCTAssertTrue(state.isDirty)
     }
 
-    func testIdenticalExternalEditBecomesClean() throws {
+    func testDecliningExternalVersionPreservesBufferAndDeduplicatesNotifications() throws {
+        for dirty in [false, true] {
+            var state = DocumentState(snapshot: try snapshot("baseline"))
+            if dirty { state.edit("local edit") }
+            let revision = state.revision
+            state.receive(try snapshot("external"))
+            state.keepCurrentContent()
+            for _ in 0..<3 { state.receive(try snapshot("external")) }
+            XCTAssertFalse(state.needsExternalConfirmation)
+            XCTAssertEqual(state.external?.text, "external")
+            XCTAssertEqual(state.text, dirty ? "local edit" : "baseline")
+            XCTAssertEqual(state.baseline.text, "baseline")
+            XCTAssertEqual(state.isDirty, dirty)
+            XCTAssertEqual(state.revision, revision)
+            state.receive(try snapshot("new external"))
+            XCTAssertTrue(state.needsExternalConfirmation)
+            XCTAssertEqual(state.external?.text, "new external")
+        }
+    }
+
+    func testExternalBaselineReturnAndMissingFileClearPendingConfirmation() throws {
+        var state = DocumentState(snapshot: try snapshot("baseline"))
+        state.receive(try snapshot("baseline"))
+        XCTAssertFalse(state.needsExternalConfirmation)
+        state.receive(try snapshot("external"))
+        state.keepCurrentContent()
+        state.receive(try snapshot("baseline"))
+        XCTAssertFalse(state.hasConflict)
+        XCTAssertFalse(state.needsExternalConfirmation)
+        state.receive(try snapshot("external"))
+        XCTAssertTrue(state.needsExternalConfirmation)
+        state.markMissing()
+        XCTAssertFalse(state.needsExternalConfirmation)
+        XCTAssertTrue(state.external == nil)
+        XCTAssertTrue(state.isMissing)
+        XCTAssertEqual(state.text, "baseline")
+    }
+
+    func testConfirmationAcceptsFreshlyReadSnapshotEvenIfDiskReverted() throws {
+        var state = DocumentState(snapshot: try snapshot("baseline"))
+        state.edit("local")
+        state.receive(try snapshot("external"))
+        state.acceptExternal(try snapshot("latest"))
+        XCTAssertEqual(state.text, "latest")
+        XCTAssertEqual(state.baseline.text, "latest")
+        XCTAssertFalse(state.isDirty)
+        XCTAssertFalse(state.needsExternalConfirmation)
+        state.edit("another edit")
+        state.receive(try snapshot("new external"))
+        state.acceptExternal(try snapshot("latest"))
+        XCTAssertEqual(state.text, "latest")
+        XCTAssertFalse(state.isDirty)
+        XCTAssertFalse(state.hasConflict)
+    }
+
+    func testSaveAsClearsDeclinedExternalVersion() throws {
+        var state = DocumentState(snapshot: try snapshot("baseline"))
+        state.edit("local")
+        state.receive(try snapshot("external"))
+        state.keepCurrentContent()
+        state.didSave(try snapshot("local"), savedText: "local")
+        XCTAssertEqual(state.text, "local")
+        XCTAssertFalse(state.isDirty)
+        XCTAssertFalse(state.hasConflict)
+        XCTAssertFalse(state.needsExternalConfirmation)
+    }
+
+    func testIdenticalExternalEditStillNeedsConfirmation() throws {
         var state = DocumentState(snapshot: try snapshot("baseline"))
         state.text = "same edit"
         state.receive(try snapshot("same edit"))
+        XCTAssertTrue(state.isDirty)
+        XCTAssertTrue(state.hasConflict)
+        XCTAssertEqual(state.baseline.text, "baseline")
+        state.acceptExternal()
         XCTAssertFalse(state.isDirty)
         XCTAssertFalse(state.hasConflict)
     }

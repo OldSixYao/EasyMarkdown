@@ -10,11 +10,12 @@ import SwiftUI
         do {
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
             let highlightingChecks = try SourceHighlightingCheck.run()
+            let scrollHighlightingChecks = try await SourceHighlightingScrollCheck.run(directory: output)
             try await SourceHighlightingCheck.capture(directory: output)
             try await documents(directory: output)
             try await associations()
             try await customExtensions(directory: output)
-            let report: [String: Any] = ["status": "passed", "highlightingChecks": highlightingChecks, "configurationDocuments": 11, "defaultEditorFormats": 7, "customExtensionsAndRowStatus": true]
+            let report: [String: Any] = ["status": "passed", "highlightingChecks": highlightingChecks, "scrollHighlightingChecks": scrollHighlightingChecks, "configurationDocuments": 11, "defaultEditorFormats": 7, "customExtensionsAndRowStatus": true]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("report.json"))
             print("PASS: 11 configuration documents, 7 default-editor formats, custom extensions and per-row status")
@@ -116,6 +117,16 @@ import SwiftUI
             if name == "compose.yaml", let window = doc.windowControllers.first?.window {
                 try await ScreenshotCapture.capture(window, to: directory.appendingPathComponent("configuration-yaml.png"))
             }
+            let external = expected.replacingOccurrences(of: "changed", with: "external")
+            let externalData = Data([0xEF, 0xBB, 0xBF]) + Data(external.utf8)
+            try externalData.write(to: url, options: .atomic)
+            try await ExternalChangeCheck.confirm(doc)
+            try await wait("配置外部版本经确认后更新两侧") {
+                let editors = views(root).compactMap { $0 as? NSTextView }.filter { $0.delegate is SourceEditor.Coordinator }
+                return editors.count == 2 && editors.allSatisfy { $0.string == external }
+            }
+            try require(doc.session.state.baseline.data == externalData && !doc.session.state.isDirty,
+                        "配置外部确认未保留原始编码和保存基线：" + name)
         }
     }
 

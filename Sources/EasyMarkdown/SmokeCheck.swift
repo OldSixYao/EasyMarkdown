@@ -41,6 +41,8 @@ import EasyMarkdownCore
             results.append("About panel includes the app icon, bundle version and clickable GitHub repository link")
             try SourceHighlightingCheck.run()
             results.append("各格式的字符串、注释、数值及行内代码互不覆盖，原生阅读和分栏预览高亮一致")
+            let scrollHighlightingChecks = try await SourceHighlightingScrollCheck.run(directory: output)
+            results.append("连续跨屏、反向及底部滚动即时着色，阅读、编辑与分栏及编辑后缓存检查通过，共\(scrollHighlightingChecks)项")
             (NSApp.delegate as? AppDelegate)?.showWelcome(nil)
             try await Task.sleep(for: .milliseconds(200))
             guard let welcome = NSApp.windows.first(where: { $0.title == "EasyMarkdown" }),
@@ -59,10 +61,12 @@ import EasyMarkdownCore
             }
             welcome.close()
             results.append("Welcome opens at 720 × 560 with a 640 × 520 minimum and supports resizing")
+            try await ExternalChangeCheck.run(directory: output)
+            results.append("外部修改经窗口确认后载入；拒绝、退出键、去重、后台延后、读取失败和过期载入保护通过")
             try await EditorWorkspaceCheck.check(directory: output.appendingPathComponent("editor-workspace"))
             results.append("编辑行号按逻辑行显示并保留输入、撤销和局部排版；原生标签支持即时合并、拆分和关闭取消")
             results.append("底部统计在阅读与编辑中常驻，鼠标拖选实时更新实际文字，分栏跟随当前选区并保留大文件局部扫描")
-            let url = output.appendingPathComponent("自动刷新 测试.md")
+            let url = output.appendingPathComponent("确认更新 测试.md")
             let source = ("# First heading\n\nOriginal content\n\n[Reference link][guide]\n\n[guide]: https://example.com\n\n| 文档 | 状态 |\n| --- | --- |\n| Markdown | 可阅读 |\n\n- [x] 支持任务\n\n" +
                 (1...50).map { "## Section \($0)\n\nParagraph \($0) 文档 📝\n\n" }.joined())
                 .replacingOccurrences(of: "\n", with: "\r\n")
@@ -100,6 +104,7 @@ import EasyMarkdownCore
             let updated = "# Updated heading\n\nNew paragraph inserted above.\n\n" + source
             let started = Date()
             try Data(updated.utf8).write(to: url, options: .atomic)
+            try await ExternalChangeCheck.confirm(doc)
             try await eventually {
                 (try? await web.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "Updated heading"
             }
@@ -220,6 +225,7 @@ import EasyMarkdownCore
             try Data(external.utf8).write(to: url, options: .atomic)
             try await eventually { doc.session.state.external?.text == external }
             guard doc.session.state.text == local else { throw Failure(message: "Local edit was overwritten") }
+            try await ExternalChangeCheck.respond(doc, accept: false)
             do {
                 try await doc.session.performSave(to: url, operation: .saveOperation)
                 throw Failure(message: "Conflicted save unexpectedly succeeded")
@@ -249,6 +255,7 @@ import EasyMarkdownCore
             try await eventually { (try? await reader.evaluateJavaScript("typeof window.updateDocument")) as? String == "function" }
             let untrusted = "# Safety\n\n<img src=x onerror=\"window.injected=true\"><script>window.injected=true</script><iframe src=\"https://example.com\"></iframe>\n\n![remote](https://example.com/tracker.png)\n\n```json\n{\"model\":\"gpt-image-2.6-sunburst\",\"text\":\"true null 42\",\"count\":-2.6e+10,\"ok\":true}\n```"
             try Data(untrusted.utf8).write(to: copy, options: .atomic)
+            try await ExternalChangeCheck.confirm(doc)
             try await eventually { (try? await reader.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "Safety" }
             let safe = try await reader.evaluateJavaScript("!window.injected && !document.querySelector('#content script, #content iframe, #content [onerror]') && !!document.querySelector('.image-placeholder') && !!document.querySelector('.hljs-attr')") as? Bool
             guard safe == true else { throw Failure(message: "Sanitization, remote-image default or syntax highlighting failed") }
@@ -274,6 +281,7 @@ import EasyMarkdownCore
             let png = NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!
             try png.write(to: output.appendingPathComponent("图片 测试.png"))
             try Data("# Local image\n\n![本地](图片%20测试.png)\n".utf8).write(to: copy, options: .atomic)
+            try await ExternalChangeCheck.confirm(doc)
             do {
                 try await eventually { ((try? await reader.evaluateJavaScript("document.querySelector('img')?.naturalWidth")) as? Int ?? 0) > 0 }
             } catch {
@@ -307,8 +315,9 @@ import EasyMarkdownCore
             recoveredDoc.updateChangeCount(.changeCleared); recoveredDoc.close()
             results.append("Recovery restores unsaved draft and detects a changed disk version")
 
-            let sample = "# EasyMarkdown\n\n安静阅读，随手修改。\n\n## 自动跟随文件更新\n\n在其他编辑器中修改并保存，文档会自动刷新，尽量保持当前阅读位置。\n\n> 阅读为主，偶尔修改。外部版本不会覆盖尚未保存的本地内容。\n\n## 常用格式\n\n| 文档 | 阅读与编辑 |\n| --- | --- |\n| Markdown | 排版、大纲、分栏预览 |\n| TXT | 纯文本阅读和编辑 |\n| JSON / XML | 高亮与格式化 |\n\n```json\n{\"name\": \"EasyMarkdown\", \"liveReload\": true}\n```\n"
+            let sample = "# EasyMarkdown\n\n安静阅读，随手修改。\n\n## 确认后更新文档\n\n在其他编辑器中修改并保存，回到文档后确认更新，尽量保持当前阅读位置。\n\n> 点击“否”保留当前内容；确定更新会放弃尚未保存的本地修改。\n\n## 常用格式\n\n| 文档 | 阅读与编辑 |\n| --- | --- |\n| Markdown | 排版、大纲、分栏预览 |\n| TXT | 纯文本阅读和编辑 |\n| JSON / XML | 高亮与格式化 |\n\n```json\n{\"name\": \"EasyMarkdown\", \"confirmExternalChanges\": true}\n```\n"
             try Data(sample.utf8).write(to: copy, options: .atomic)
+            try await ExternalChangeCheck.confirm(doc)
             try await eventually { (try? await reader.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "EasyMarkdown" }
             _ = try await reader.evaluateJavaScript("window.scrollTo(0,0)")
             try await Task.sleep(for: .milliseconds(100))
@@ -489,6 +498,7 @@ import EasyMarkdownCore
         try await eventually { doc.session.searchResultCount == 5 }
         let changed = source.replacingOccurrences(of: "Alpha alpha ALPHA", with: "alpha")
         try Data(changed.utf8).write(to: url, options: .atomic)
+        try await ExternalChangeCheck.confirm(doc)
         try await eventually(description: "external refresh recounts search") { doc.session.searchResultCount == 3 }
         guard (try await reader.evaluateJavaScript("readerSearch.index")) as? Int == 0 else { throw Failure(message: "Refresh did not reset the current match") }
 
@@ -501,21 +511,26 @@ import EasyMarkdownCore
             const clipped=window.updateReaderSearch('prefix',false,0);
             const truncated=clipped.truncated && clipped.count===71428;
             window.updateDocument('fallback fallback','text','file:///',prefs,{});
-            const descriptor=Object.getOwnPropertyDescriptor(globalThis,'Highlight');
-            Object.defineProperty(globalThis,'Highlight',{value:undefined,configurable:true});
-            window.updateReaderSearch('fallback',false,0);
-            const fallback=readerSearch.selection && getSelection().toString()==='fallback';
-            window.updateReaderSearch('',false,0);
-            const cleared=!getSelection().rangeCount;
-            if(descriptor) Object.defineProperty(globalThis,'Highlight',descriptor);
-            else delete globalThis.Highlight;
-            return {space,truncated,fallback,cleared};
+            // 模拟缺少高亮注册表，避免替换全局构造器影响浏览器缓存绑定。
+            const descriptor=Object.getOwnPropertyDescriptor(CSS,'highlights');
+            Object.defineProperty(CSS,'highlights',{value:undefined,configurable:true});
+            try {
+                window.updateReaderSearch('fallback',false,0);
+                const fallback=readerSearch.selection && getSelection().toString()==='fallback';
+                window.updateReaderSearch('',false,0);
+                const cleared=!getSelection().rangeCount;
+                return {space,truncated,fallback,cleared};
+            } finally {
+                if(descriptor) Object.defineProperty(CSS,'highlights',descriptor);
+                else delete CSS.highlights;
+            }
             """#)
         guard let edge = edgeCases as? [String: Bool], edge.values.allSatisfy({ $0 }) else {
             throw Failure(message: "Search whitespace/truncation/fallback checks failed: \(edgeCases)")
         }
         // Restore through the real document renderer before entering native replace.
         try Data(source.utf8).write(to: url, options: .atomic)
+        try await ExternalChangeCheck.confirm(doc)
         try await eventually(description: "search fixture restores") {
             guard doc.session.searchResultCount == 5 else { return false }
             return (try? await reader.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "Search checks"
@@ -808,6 +823,7 @@ import EasyMarkdownCore
         let longInline = String(repeating: "长代码", count: 100)
         let source = "# Copy `标题`\n\n正文 `" + inline + "`。\n\n[`链接代码`](https://example.com/copy-must-not-open)\n\n`" + longInline + "`\n\n可更新段落\n\n```javascript\n" + fenced + "```\n\n    缩进代码 <&>\n        保留空格\n\n```\n```\n"
         try Data(source.utf8).write(to: file, options: .atomic)
+        try await ExternalChangeCheck.confirm(document)
         try await eventually(description: "copy buttons render") {
             (try? await reader.evaluateJavaScript("document.querySelectorAll('.code-copy-button').length")) as? Int == 7
         }
@@ -896,6 +912,7 @@ import EasyMarkdownCore
         _ = try await reader.evaluateJavaScript("content.style.removeProperty('max-width');document.querySelector('pre>.code-copy-button').blur();true")
         let updated = source.replacingOccurrences(of: "可更新段落", with: "已更新段落").replacingOccurrences(of: inline, with: "更新后的代码")
         try Data(updated.utf8).write(to: file, options: .atomic)
+        try await ExternalChangeCheck.confirm(document)
         try await eventually(description: "copy fixture reloads updated code") { (try? await reader.evaluateJavaScript("content.textContent.includes('已更新段落')")) as? Bool == true }
         guard (try await reader.evaluateJavaScript("document.querySelector('h1')===window.__copyHeading && document.querySelector('pre')===window.__copyBlock && document.querySelector('pre>.code-copy-button')===window.__copyButton && content.querySelectorAll('.code-copy-button').length===7 && sourceBlocks.every(b=>b.element.isConnected)")) as? Bool == true else {
             throw Failure(message: "Incremental code copy duplicated controls or discarded unchanged nodes")

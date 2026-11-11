@@ -5,7 +5,32 @@ enum SourceHighlighting {
     static let maximumLineLength = 4_096
     static let maximumScanLength = 200_000
 
-    enum Style { case key, string, literal, comment, code, link, heading }
+    enum Style: Sendable { case key, string, literal, comment, code, link, heading }
+
+    struct Token: Sendable {
+        let range: NSRange
+        let style: Style
+    }
+
+    static func hasTime(until deadline: TimeInterval) -> Bool {
+        !Task<Never, Never>.isCancelled && ProcessInfo.processInfo.systemUptime < deadline
+    }
+
+    /// 后台快照只保留值类型与原始覆盖顺序，不携带视图或颜色对象。
+    /// 超时或取消时丢弃不完整结果，长逻辑行仍使用默认文字颜色。
+    static func snapshot(in source: String, kind: DocumentKind) -> [Token]? {
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.1
+        guard hasTime(until: deadline), source.utf8.count < maximumScanLength else { return nil }
+        let text = source as NSString
+        let ranges = boundedLineRanges(in: text, range: NSRange(location: 0, length: text.length), deadline: deadline)
+        guard hasTime(until: deadline) else { return nil }
+        var tokens: [Token] = []
+        let completed = enumerate(in: source, kind: kind, ranges: ranges,
+                                  timeBudget: deadline - ProcessInfo.processInfo.systemUptime) { range, style in
+            tokens.append(Token(range: range, style: style))
+        }
+        return completed && hasTime(until: deadline) ? tokens : nil
+    }
     private enum FieldContext { case json, jsonc }
 
     private struct Rule {
@@ -45,7 +70,7 @@ enum SourceHighlighting {
             var completed = true
             let text = source as NSString
             expression.enumerateMatches(in: source, options: [.reportProgress, .withoutAnchoringBounds], range: range) { match, _, stop in
-                guard ProcessInfo.processInfo.systemUptime < deadline else {
+                guard hasTime(until: deadline) else {
                     completed = false
                     stop.pointee = true
                     return
@@ -62,7 +87,7 @@ enum SourceHighlighting {
                         let isField = rule.fieldContext.map {
                             isJSONField(in: text, after: NSMaxRange(range), context: $0, deadline: deadline)
                         } ?? false
-                        guard ProcessInfo.processInfo.systemUptime < deadline else {
+                        guard hasTime(until: deadline) else {
                             completed = false
                             stop.pointee = true
                             return
@@ -85,7 +110,7 @@ enum SourceHighlighting {
                     break
                 }
             }
-            return completed
+            return completed && hasTime(until: deadline)
         }
     }
 
@@ -95,7 +120,7 @@ enum SourceHighlighting {
                                     deadline: TimeInterval) -> Bool {
         var cursor = start
         while cursor < source.length {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { return false }
+            guard hasTime(until: deadline) else { return false }
             switch source.character(at: cursor) {
             case 9, 10, 13, 32:
                 cursor += 1
@@ -104,14 +129,14 @@ enum SourceHighlighting {
                 case 47:
                     cursor += 2
                     while cursor < source.length, source.character(at: cursor) != 10, source.character(at: cursor) != 13 {
-                        if cursor & 255 == 0, ProcessInfo.processInfo.systemUptime >= deadline { return false }
+                        if cursor & 255 == 0, !hasTime(until: deadline) { return false }
                         cursor += 1
                     }
                 case 42:
                     cursor += 2
                     var closed = false
                     while cursor + 1 < source.length {
-                        if cursor & 255 == 0, ProcessInfo.processInfo.systemUptime >= deadline { return false }
+                        if cursor & 255 == 0, !hasTime(until: deadline) { return false }
                         if source.character(at: cursor) == 42, source.character(at: cursor + 1) == 47 {
                             cursor += 2
                             closed = true
@@ -180,16 +205,18 @@ enum SourceHighlighting {
 
     /// Multiline grammars scan from the start to retain lexical context, but
     /// only bounded visible lines receive temporary display attributes.
-    static func enumerate(in source: String, kind: DocumentKind, ranges: [NSRange],
-                          using body: (NSRange, Style) -> Void) {
-        guard !ranges.isEmpty else { return }
+    @discardableResult static func enumerate(in source: String, kind: DocumentKind, ranges: [NSRange],
+                                            timeBudget: TimeInterval = 0.008,
+                                            using body: (NSRange, Style) -> Void) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeBudget
+        guard hasTime(until: deadline) else { return false }
+        guard !ranges.isEmpty else { return true }
         let bounds = NSRange(location: ranges[0].location, length: NSMaxRange(ranges[ranges.count - 1]) - ranges[0].location)
         if [.yaml, .ini, .configuration, .environment, .properties].contains(kind) {
-            ConfigurationHighlighting.enumerate(in: source, kind: kind, limit: NSMaxRange(bounds),
-                deadline: ProcessInfo.processInfo.systemUptime + 0.008) { match, style in
+            return ConfigurationHighlighting.enumerate(in: source, kind: kind, limit: NSMaxRange(bounds),
+                deadline: deadline) { match, style in
                 for intersection in intersections(of: match, with: ranges) { body(intersection, style) }
             }
-            return
         }
         let grammar: Grammar
         let multiline: Bool
@@ -199,33 +226,35 @@ enum SourceHighlighting {
         case .xml: (grammar, multiline) = (xml, true)
         case .toml: (grammar, multiline) = (toml, true)
         case .markdown: (grammar, multiline) = (markdownCode, true)
-        case .text, .yaml, .ini, .configuration, .environment, .properties: return
+        case .text, .yaml, .ini, .configuration, .environment, .properties: return true
         }
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.008
         let scanRanges = multiline ? [NSRange(location: 0, length: (source as NSString).length)] : ranges
         var protected: [NSRange] = []
         for range in scanRanges {
             guard grammar.enumerate(in: source, range: range, deadline: deadline, bounds: bounds, using: { match, style in
                 if kind == .markdown { protected.append(match) }
                 for intersection in intersections(of: match, with: ranges) { body(intersection, style) }
-            }) else { return }
+            }) else { return false }
         }
-        guard kind == .markdown else { return }
+        guard kind == .markdown else { return true }
         // Code and HTML comments retain their colors even inside a heading or
         // link. Only the remaining parts of those larger constructs are styled.
         for range in ranges {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { return }
+            guard hasTime(until: deadline) else { return false }
+            var completed = true
             markdownHeading.enumerateMatches(in: source, options: [.reportProgress, .withoutAnchoringBounds], range: range) { match, _, stop in
-                guard ProcessInfo.processInfo.systemUptime < deadline else { stop.pointee = true; return }
+                guard hasTime(until: deadline) else { completed = false; stop.pointee = true; return }
                 if let match {
                     for part in excluding(protected, from: match.range) { body(part, .heading) }
                 }
             }
+            guard completed else { return false }
             for match in markdownLinks(in: source as NSString, range: range, deadline: deadline) {
-                guard ProcessInfo.processInfo.systemUptime < deadline else { return }
+                guard hasTime(until: deadline) else { return false }
                 for part in excluding(protected, from: match) { body(part, .link) }
             }
         }
+        return hasTime(until: deadline)
     }
 
     private static func intersections(of range: NSRange, with ranges: [NSRange]) -> [NSRange] {
@@ -257,12 +286,13 @@ enum SourceHighlighting {
 
     /// Keep consecutive short lines together so multiline comments still match.
     /// A long logical line is skipped rather than highlighted using a false boundary.
-    static func boundedLineRanges(in source: NSString, range: NSRange) -> [NSRange] {
+    static func boundedLineRanges(in source: NSString, range: NSRange,
+                                  deadline: TimeInterval = .infinity) -> [NSRange] {
         let range = NSIntersectionRange(range, NSRange(location: 0, length: source.length))
         var cursor = range.location
         var remaining = maximumScanLength
         var ranges: [NSRange] = []
-        while cursor < NSMaxRange(range), remaining > 0 {
+        while cursor < NSMaxRange(range), remaining > 0, hasTime(until: deadline) {
             let line = source.lineRange(for: NSRange(location: cursor, length: 0))
             let end = min(NSMaxRange(line), NSMaxRange(range))
             guard end > cursor else { break }
@@ -285,7 +315,7 @@ enum SourceHighlighting {
         var state = State.text
         var matches: [NSRange] = []
         for index in range.location..<NSMaxRange(range) {
-            if index & 255 == 0, ProcessInfo.processInfo.systemUptime >= deadline { break }
+            if index & 255 == 0, !hasTime(until: deadline) { break }
             let character = source.character(at: index)
             if character == 10 || character == 13 { state = .text; continue }
             switch state {

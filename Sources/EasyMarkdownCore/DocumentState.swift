@@ -13,6 +13,7 @@ public struct DocumentState: Sendable {
     public private(set) var lastChange: TextChange?
     public private(set) var isDirty = false
     public private(set) var external: FileSnapshot?
+    public private(set) var needsExternalConfirmation = false
     public private(set) var isMissing = false
     private var differences: [Difference] = []
 
@@ -112,24 +113,30 @@ public struct DocumentState: Sendable {
         isMissing = false
         if snapshot.data == baseline.data {
             external = nil
-        } else if (buffer as NSString).compare(snapshot.text) == .orderedSame {
-            baseline = snapshot
-            resetDifference()
-            external = nil
-        } else if isDirty {
+            needsExternalConfirmation = false
+        } else if snapshot.data != external?.data {
             external = snapshot
-        } else {
-            follow(snapshot)
-            external = nil
+            needsExternalConfirmation = true
         }
     }
 
-    public mutating func markMissing() { isMissing = true }
+    public mutating func markMissing() {
+        isMissing = true
+        external = nil
+        needsExternalConfirmation = false
+    }
+
+    public mutating func keepCurrentContent() { needsExternalConfirmation = false }
 
     public mutating func acceptExternal() {
         guard let external else { return }
-        follow(external)
+        acceptExternal(external)
+    }
+
+    public mutating func acceptExternal(_ snapshot: FileSnapshot) {
+        follow(snapshot)
         self.external = nil
+        needsExternalConfirmation = false
         isMissing = false
     }
 
@@ -139,6 +146,7 @@ public struct DocumentState: Sendable {
         if (buffer as NSString).compare(savedText) == .orderedSame { follow(snapshot) }
         else { resetDifference() }
         external = nil
+        needsExternalConfirmation = false
         isMissing = false
     }
 }

@@ -63,13 +63,8 @@ struct SourceEditor: NSViewRepresentable {
         session.applyMarkdown = { [weak coordinator = context.coordinator] command in
             coordinator?.apply(command)
         }
-        session.replaceText = { [weak text, weak coordinator = context.coordinator] value in
-            guard let text, let coordinator, text.delegate === coordinator,
-                  text.isEditable, !text.hasMarkedText() else { return }
-            text.breakUndoCoalescing()
-            text.insertText(value, replacementRange: NSRange(location: 0, length: (text.string as NSString).length))
-            text.breakUndoCoalescing()
-            text.undoManager?.setActionName(L10n.text("格式化"))
+        session.replaceText = { [weak coordinator = context.coordinator] value in
+            coordinator?.replacePreservingPosition(value)
         }
         session.editorFindAction = { [weak coordinator = context.coordinator] request in
             coordinator?.performFind(request) ?? false
@@ -94,39 +89,53 @@ struct SourceEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let text = context.coordinator.textView else { return }
         let size = isReadOnly ? readerFontSize : fontSize
-        if text.font?.pointSize != CGFloat(size) {
+        let fontChanged = text.font?.pointSize != CGFloat(size)
+        if fontChanged {
             text.font = .monospacedSystemFont(ofSize: size, weight: .regular)
         }
         let coordinator = context.coordinator
         let needsReplacement = overrideText.map { $0 != coordinator.overrideText } ??
             (coordinator.appliedRevision != session.state.revision)
         if needsReplacement && !text.hasMarkedText() {
+            let incrementalChange = overrideText == nil && isSecondary && coordinator.appliedRevision &+ 1 == session.state.revision
+                ? session.state.lastChange : nil
+            let keepsUndo = !isSecondary && overrideText == nil && session.normalizedSaveRevision == session.state.revision
+            let position = coordinator.replacementPosition(for: overrideText ?? session.state.text, change: incrementalChange)
             context.coordinator.updatingText = true
-            let range = text.selectedRange()
-            let visible = scroll.contentView.bounds.origin
-            if overrideText == nil, isSecondary,
-               coordinator.appliedRevision &+ 1 == session.state.revision,
-               let change = session.state.lastChange,
+            coordinator.invalidateHighlighting()
+            if let change = incrementalChange,
                change.range.location <= (text.textStorage?.length ?? 0),
                change.range.length <= (text.textStorage?.length ?? 0) - change.range.location {
                 let replacement = (session.state.text as NSString).substring(with:
                     NSRange(location: change.range.location, length: change.replacementLength))
                 text.textStorage?.replaceCharacters(in: change.range, with: replacement)
+            } else if keepsUndo {
+                let wasEditable = text.isEditable
+                text.isEditable = true
+                text.breakUndoCoalescing()
+                text.insertText(session.state.text, replacementRange: NSRange(location: 0, length: text.textStorage?.length ?? 0))
+                text.breakUndoCoalescing()
+                text.undoManager?.setActionName(L10n.text("保存"))
+                text.isEditable = wasEditable
             } else {
                 text.string = overrideText ?? session.state.text
             }
             coordinator.appliedRevision = session.state.revision
             coordinator.overrideText = overrideText
-            let count = (text.string as NSString).length
-            let start = min(range.location, count)
-            text.setSelectedRange(NSRange(location: start, length: min(range.length, count - start)))
-            if !isSecondary && overrideText == nil { text.undoManager?.removeAllActions() }
-            scroll.contentView.scroll(to: visible)
+            coordinator.restore(position)
+            if !isSecondary && overrideText == nil && !keepsUndo { text.undoManager?.removeAllActions() }
             context.coordinator.highlight()
             context.coordinator.updatingText = false
+        } else if fontChanged || coordinator.highlightedKind != session.kind {
+            coordinator.highlight()
         }
-        text.isEditable = !isReadOnly && !session.isSaving
-        text.allowsUndo = !isReadOnly
+        let editable = !isReadOnly && !session.isSaving
+        if text.isEditable != editable {
+            let viewport = SourceViewport(text)
+            text.isEditable = editable
+            viewport?.restore(in: text)
+        }
+        if text.allowsUndo != !isReadOnly { text.allowsUndo = !isReadOnly }
         context.coordinator.updateLineNumbers(scroll, visible: showLineNumbers && !isReadOnly && !isSecondary && overrideText == nil)
         text.setAccessibilityLabel(L10n.text(isReadOnly ? "文档内容" : "文档源码编辑器"))
         coordinator.scheduleStatistics()
@@ -142,6 +151,7 @@ struct SourceEditor: NSViewRepresentable {
         scroll.verticalRulerView = nil
         coordinator.highlightTask?.cancel()
         coordinator.highlightTask = nil
+        coordinator.invalidateHighlighting()
         coordinator.scrollTask?.cancel()
         coordinator.scrollTask = nil
         coordinator.positionTask?.cancel()
@@ -174,6 +184,16 @@ struct SourceEditor: NSViewRepresentable {
         var overrideText: String?
         private var pendingChange: TextChange?
         private var highlightedRange: NSRange?
+        private var highlightedViewport: NSRect?
+        fileprivate var highlightedKind: DocumentKind?
+        private var highlightedContainerWidth: CGFloat?
+        private var isHighlighting = false
+        private var highlightGeneration: UInt64 = 0
+        private var highlightSnapshot: [SourceHighlighting.Token]?
+        private var highlightSnapshotKind: DocumentKind?
+        private var highlightSnapshotRequested = false
+        private var highlightSnapshotTask: Task<[SourceHighlighting.Token]?, Never>?
+        private var highlightSnapshotCompletion: Task<Void, Never>?
         private(set) var statisticsIndex: DocumentStatisticsIndex?
         private var statisticsObserver: NSObjectProtocol?
         private var statisticsRefresh: Timer?
@@ -186,6 +206,8 @@ struct SourceEditor: NSViewRepresentable {
             if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
             if let statisticsObserver { NotificationCenter.default.removeObserver(statisticsObserver) }
             statisticsRefresh?.invalidate()
+            highlightSnapshotTask?.cancel()
+            highlightSnapshotCompletion?.cancel()
         }
 
         init(session: DocumentSession, isSecondary: Bool = false, isOverride: Bool = false) {
@@ -359,7 +381,8 @@ struct SourceEditor: NSViewRepresentable {
 
         private func didScroll() {
             (textView?.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.needsDisplay = true
-            scheduleHighlight()
+            // 滚动不能复用输入防抖：连续事件会不断推迟着色，露出默认文字颜色。
+            if !updatingText && pendingChange == nil { highlight(onlyIfNeeded: true) }
             if !isSecondary && !isOverride && session.usesNativeReader {
                 positionTask?.cancel()
                 positionTask = Task { @MainActor [weak self] in
@@ -386,6 +409,60 @@ struct SourceEditor: NSViewRepresentable {
                 if self.isSecondary { self.session.previewDidScroll(position) }
                 else { self.session.editorDidScroll(position) }
             }
+        }
+
+        struct ReplacementPosition {
+            let ranges: [NSRange]
+            var viewport: SourceViewport?
+        }
+
+        func replacementPosition(for value: String, change: TextChange? = nil) -> ReplacementPosition {
+            guard let textView else { return ReplacementPosition(ranges: [], viewport: nil) }
+            let ranges = textView.selectedRanges.map(\.rangeValue)
+            var viewport = SourceViewport(textView)
+            let offsets = ranges.flatMap { [$0.location, NSMaxRange($0)] } + (viewport.map { [$0.offset] } ?? [])
+            let mapped: [Int]
+            if let change, change.range.length != (textView.textStorage?.length ?? 0) {
+                // 分栏逐次输入只平移受影响位置，不为每次按键扫描全文。
+                mapped = offsets.map { offset in
+                    if offset < change.range.location { return offset }
+                    if offset >= NSMaxRange(change.range) { return offset + change.replacementLength - change.range.length }
+                    return change.range.location + min(offset - change.range.location, change.replacementLength)
+                }
+            } else {
+                mapped = TextPositionMapping.map(offsets, from: textView.string, to: value)
+            }
+            let selections = ranges.indices.map { index in
+                let start = mapped[index * 2], end = mapped[index * 2 + 1]
+                return NSRange(location: min(start, end), length: abs(end - start))
+            }
+            if viewport != nil { viewport?.offset = mapped.last! }
+            return ReplacementPosition(ranges: selections, viewport: viewport)
+        }
+
+        func restore(_ position: ReplacementPosition) {
+            guard let textView else { return }
+            textView.setSelectedRanges(position.ranges.map { NSValue(range: $0) }, affinity: .downstream, stillSelecting: false)
+            position.viewport?.restore(in: textView)
+            synchronizedY = textView.enclosingScrollView?.contentView.bounds.minY
+            scrollTask?.cancel()
+            scrollTask = nil
+        }
+
+        func replacePreservingPosition(_ value: String) {
+            guard let textView, textView.delegate === self, textView.isEditable, !textView.hasMarkedText() else { return }
+            let position = replacementPosition(for: value)
+            // 正文替换仍经过原生输入与撤销；禁止中间跳到末尾的通知传播到另一侧。
+            scrollTask?.cancel()
+            scrollTask = nil
+            textView.breakUndoCoalescing()
+            textView.insertText(value, replacementRange: NSRange(location: 0, length: (textView.string as NSString).length))
+            textView.breakUndoCoalescing()
+            textView.undoManager?.setActionName(L10n.text("格式化"))
+            updatingText = true
+            restore(position)
+            updatingText = false
+            selectionDidChange()
         }
 
         fileprivate func scroll(to position: SplitScrollPosition) {
@@ -429,6 +506,7 @@ struct SourceEditor: NSViewRepresentable {
         }
         func textDidChange(_ notification: Notification) {
             guard let textView, !updatingText, !isSecondary, !isOverride else { return }
+            invalidateHighlighting()
             if let range = highlightedRange, let change = pendingChange,
                change.range.location < NSMaxRange(range) {
                 let delta = change.replacementLength - change.range.length
@@ -481,8 +559,43 @@ struct SourceEditor: NSViewRepresentable {
             highlightTask?.cancel()
             highlightTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(100))
-                guard !Task.isCancelled else { return }
-                self?.highlight()
+                guard !Task.isCancelled, let self else { return }
+                self.highlightTask = nil
+                self.highlight()
+            }
+        }
+
+        func invalidateHighlighting() {
+            highlightGeneration &+= 1
+            highlightedViewport = nil
+            highlightSnapshot = nil
+            highlightSnapshotRequested = false
+            highlightSnapshotTask?.cancel()
+            highlightSnapshotTask = nil
+            highlightSnapshotCompletion?.cancel()
+            highlightSnapshotCompletion = nil
+        }
+
+        private func prepareHighlightSnapshot(source: String, view: NSTextView) {
+            guard !highlightSnapshotRequested else { return }
+            highlightSnapshotRequested = true
+            let generation = highlightGeneration
+            let kind = session.kind
+            // 后台只处理不可变正文和语法范围，不访问原生视图或颜色对象。
+            let worker = Task.detached(priority: .userInitiated) {
+                SourceHighlighting.snapshot(in: source, kind: kind)
+            }
+            highlightSnapshotTask = worker
+            highlightSnapshotCompletion = Task { @MainActor [weak self, weak view] in
+                let snapshot = await worker.value
+                guard !Task.isCancelled, let self, let view, self.textView === view,
+                      self.highlightGeneration == generation, self.session.kind == kind else { return }
+                self.highlightSnapshotTask = nil
+                self.highlightSnapshotCompletion = nil
+                guard let snapshot, view.string == source else { return }
+                self.highlightSnapshot = snapshot
+                // 当前视口可能来自尚未完成的局部扫描，快照就绪后必须重新应用。
+                self.highlight()
             }
         }
 
@@ -497,10 +610,22 @@ struct SourceEditor: NSViewRepresentable {
             }
         }
 
-        func highlight() {
-            guard let view = textView, !view.hasMarkedText(), let storage = view.textStorage,
+        func highlight(onlyIfNeeded: Bool = false) {
+            guard !isHighlighting, let view = textView, !view.hasMarkedText(), let storage = view.textStorage,
                   let layout = view.layoutManager, let container = view.textContainer else { return }
-            let source = view.string
+            if highlightSnapshotKind != session.kind {
+                invalidateHighlighting()
+                highlightSnapshotKind = session.kind
+            }
+            if onlyIfNeeded, highlightedKind == session.kind,
+               highlightedContainerWidth == container.containerSize.width,
+               let highlightedViewport, highlightedViewport.contains(view.visibleRect) { return }
+            // 局部排版可能引起新的边界通知，防止同步滚动着色重入。
+            isHighlighting = true
+            defer { isHighlighting = false }
+            highlightedViewport = nil
+            highlightedKind = session.kind
+            highlightedContainerWidth = container.containerSize.width
             let entire = NSRange(location: 0, length: storage.length)
             // Color is presentation, not a text edit: avoid invalidating the
             // storage/layout or retaining attributed copies in the undo history.
@@ -509,14 +634,17 @@ struct SourceEditor: NSViewRepresentable {
                     forCharacterRange: NSIntersectionRange(highlightedRange, entire))
                 self.highlightedRange = nil
             }
-            guard (isOverride ? source.utf8.count : session.state.byteCount) < 200_000,
-                  storage.length > 0 else { return }
-            guard session.kind != .text else { return }
+            guard storage.length > 0, session.kind != .text,
+                  isOverride || session.state.byteCount < SourceHighlighting.maximumScanLength else { return }
+            let source = view.string
+            guard !isOverride || source.utf8.count < SourceHighlighting.maximumScanLength else { return }
+            prepareHighlightSnapshot(source: source, view: view)
             var range = entire
-            if session.kind != .xml && session.kind != .jsonc {
-                // Multiline lexical context is handled by SourceHighlighting;
-                // display attributes still stay near the visible text.
-                var visible = view.visibleRect.insetBy(dx: 0, dy: -250)
+            let viewport = view.visibleRect
+            let bufferedViewport = viewport.insetBy(dx: 0, dy: -max(250, viewport.height))
+            if !viewport.isEmpty {
+                // 所有格式都只更新视口及上下各一屏；词法扫描仍保留多行上下文。
+                var visible = bufferedViewport
                 visible.origin.x -= view.textContainerInset.width
                 visible.origin.y -= view.textContainerInset.height
                 let glyphs = layout.glyphRange(forBoundingRect: visible, in: container)
@@ -529,8 +657,26 @@ struct SourceEditor: NSViewRepresentable {
             // an unbounded scan. Long logical lines keep the default text color.
             let ranges = SourceHighlighting.boundedLineRanges(in: source as NSString, range: range)
             highlightedRange = range
-            SourceHighlighting.enumerate(in: source, kind: session.kind, ranges: ranges) { range, style in
-                layout.addTemporaryAttribute(.foregroundColor, value: Self.color(for: style), forCharacterRange: range)
+            var tokens: [SourceHighlighting.Token] = []
+            let completed: Bool
+            if let highlightSnapshot {
+                // 保留词法输出次序，标题、链接等重叠样式继续按原有优先级覆盖。
+                for token in highlightSnapshot {
+                    let part = NSIntersectionRange(token.range, range)
+                    if part.length > 0 { tokens.append(SourceHighlighting.Token(range: part, style: token.style)) }
+                }
+                completed = true
+            } else {
+                completed = SourceHighlighting.enumerate(in: source, kind: session.kind, ranges: ranges) { range, style in
+                    tokens.append(SourceHighlighting.Token(range: range, style: style))
+                }
+            }
+            for token in tokens {
+                layout.addTemporaryAttribute(.foregroundColor, value: Self.color(for: token.style), forCharacterRange: token.range)
+            }
+            if completed, !viewport.isEmpty {
+                // 接近预着色区边缘时提前刷新，未完成的扫描不能作为覆盖缓存。
+                highlightedViewport = bufferedViewport.insetBy(dx: 0, dy: min(250, viewport.height / 2))
             }
         }
 

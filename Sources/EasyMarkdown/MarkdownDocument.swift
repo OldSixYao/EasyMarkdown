@@ -47,6 +47,7 @@ final class MarkdownDocument: NSDocument {
     override var isDocumentEdited: Bool { session.state.isDirty }
 
     override func prepareSavePanel(_ savePanel: NSSavePanel) -> Bool {
+        session.prepareForSavePanel()
         if let url = fileURL {
             savePanel.nameFieldStringValue = url.lastPathComponent
             savePanel.allowedContentTypes = []
@@ -102,6 +103,7 @@ final class MarkdownDocument: NSDocument {
     nonisolated override func accommodatePresentedItemDeletion(completionHandler: @escaping (Error?) -> Void) {
         Task { @MainActor [weak self] in
             self?.session.state.markMissing()
+            self?.session.externalChangePrompt.schedule()
             completionHandler(nil)
         }
     }

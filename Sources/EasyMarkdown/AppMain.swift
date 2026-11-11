@@ -43,6 +43,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--external-change-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task {
+                do {
+                    try await ExternalChangeCheck.run(directory: output)
+                    try Data("passed".utf8).write(to: output.appendingPathComponent("result.txt"))
+                    print("PASS: 外部修改确认检查")
+                    NSApp.terminate(nil)
+                } catch { print("FAIL: \(error)"); exit(1) }
+            }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--editor-workspace-test"),
            CommandLine.arguments.indices.contains(index + 1) {
             let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])

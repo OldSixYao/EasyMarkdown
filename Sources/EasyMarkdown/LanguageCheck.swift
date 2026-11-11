@@ -142,6 +142,7 @@ import EasyMarkdownCore
                 doc.session.edit(source + "\nUnsaved modification\n")
                 try Data("# Changed elsewhere\n".utf8).write(to: file, options: .atomic)
                 try await wait("external conflict banner") { doc.session.state.external != nil }
+                try await ExternalChangeCheck.respond(doc, accept: false)
                 try await ScreenshotCapture.capture(window, to: output.appendingPathComponent("conflict-narrow.png"))
                 try Data(source.utf8).write(to: file, options: .atomic)
                 await doc.session.reload(force: true)?.value
@@ -150,6 +151,27 @@ import EasyMarkdownCore
                 try await ScreenshotCapture.capture(window, to: output.appendingPathComponent("recovery-narrow.png"))
                 doc.session.recovery = nil
             }
+            let externalText = "# Localized external confirmation\n"
+            try Data(externalText.utf8).write(to: file, options: .atomic)
+            try await ExternalChangeCheck.waitForPrompt(doc)
+            guard let externalSheet = ExternalChangeCheck.prompt(for: doc), let externalRoot = externalSheet.contentView else {
+                throw SmokeCheck.Failure(message: "缺少外部修改确认框")
+            }
+            let externalButtons = descendants(externalRoot).compactMap { ($0 as? NSButton)?.title }
+            let externalLabels = descendants(externalRoot).compactMap { ($0 as? NSTextField)?.stringValue }
+            let ok = expected == "en" ? "OK" : expected == "zh-Hant" ? "確定" : "确定"
+            let no = expected == "en" ? "No" : "否"
+            let expectedMessage = expected == "en" ? "“Language Sample.md” was modified elsewhere. Update to the latest contents?" :
+                expected == "zh-Hant" ? "文件「Language Sample.md」已在其他位置修改，是否更新為最新內容？" :
+                "文档「Language Sample.md」已在其他位置修改，是否更新为最新内容？"
+            guard externalButtons.contains(ok), externalButtons.contains(no), externalLabels.contains(expectedMessage) else {
+                throw SmokeCheck.Failure(message: "外部修改确认文案未正确本地化：\(externalLabels) \(externalButtons)")
+            }
+            try await ScreenshotCapture.capture(window, to: output.appendingPathComponent("external-confirmation.png"))
+            try await ExternalChangeCheck.respond(doc, accept: false)
+            guard doc.session.state.text != externalText else { throw SmokeCheck.Failure(message: "拒绝更新没有保留正文") }
+            try Data(source.utf8).write(to: file, options: .atomic)
+            await doc.session.reload(force: true)?.value
             doc.session.edit(source + "\nUnsaved modification\n")
             let decision = CloseDecision()
             doc.canClose(withDelegate: decision, shouldClose: #selector(CloseDecision.document(_:shouldClose:contextInfo:)), contextInfo: nil)
@@ -170,7 +192,7 @@ import EasyMarkdownCore
             doc.updateChangeCount(.changeCleared); doc.close(); document = nil
             let report: [String: Any] = ["status":"passed", "choice":AppLanguage.launchChoice.rawValue,
                 "resolved":expected, "nativeReplace":nativeTitles, "saveButtons":buttons.map(\.title),
-                "checks":["settings", "preference persistence/reset", "menu and app strings", "preview copy labels", "search count", "native replace", "localized reader statistics", "localized editor statistics", "native save cancel preserves edits"]]
+                "checks":["settings", "preference persistence/reset", "menu and app strings", "preview copy labels", "search count", "native replace", "localized reader statistics", "localized editor statistics", "外部修改确认与拒绝保留内容", "native save cancel preserves edits"]]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("report.json"))
             print("PASS: application and native UI in \(expected) (choice: \(AppLanguage.launchChoice.rawValue))")
             NSApp.terminate(nil)

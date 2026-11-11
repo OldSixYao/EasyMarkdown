@@ -13,11 +13,17 @@ enum ConfigurationHighlighting {
     }
 
     static func enumerate(in source: String, kind: DocumentKind, limit: Int, deadline: TimeInterval,
-                          using body: (NSRange, SourceHighlighting.Style) -> Void) {
+                          using body: (NSRange, SourceHighlighting.Style) -> Void) -> Bool {
+        guard SourceHighlighting.hasTime(until: deadline) else { return false }
         var scanner = Scanner(source: source, units: Array(source.utf16), deadline: deadline)
         if kind == .yaml { scanner.yaml(limit: limit) }
         else { scanner.assignments(kind: kind, limit: limit) }
-        for (range, style) in scanner.tokens { body(range, style) }
+        for (range, style) in scanner.tokens {
+            // 局部扫描超时后仍交付已经识别的颜色；取消的后台工作立即丢弃。
+            guard !Task<Never, Never>.isCancelled else { return false }
+            body(range, style)
+        }
+        return scanner.cursor >= min(limit, scanner.units.count) && SourceHighlighting.hasTime(until: deadline)
     }
 
     private struct Scanner {
@@ -28,7 +34,7 @@ enum ConfigurationHighlighting {
         var tokens: [(NSRange, SourceHighlighting.Style)] = []
 
         private func hasTime(at index: Int) -> Bool {
-            index & 255 != 0 || ProcessInfo.processInfo.systemUptime < deadline
+            index & 255 != 0 || SourceHighlighting.hasTime(until: deadline)
         }
 
         private func isSpace(_ character: UInt16) -> Bool { character == 32 || character == 9 }
@@ -88,7 +94,7 @@ enum ConfigurationHighlighting {
             var continuationIndent: Int?
             var pendingIndent: Int?
             var forceString = false
-            while cursor < min(limit, units.count), ProcessInfo.processInfo.systemUptime < deadline {
+            while cursor < min(limit, units.count), SourceHighlighting.hasTime(until: deadline) {
                 let character = units[cursor]
                 if isSpace(character) || isNewline(character) { cursor += 1; continue }
                 let line = lineStart(at: cursor)
@@ -185,7 +191,8 @@ enum ConfigurationHighlighting {
         private mutating func yamlBlock() -> Bool {
             let start = cursor
             var indicatorEnd = start + 1
-            while indicatorEnd < units.count, [43, 45, 49, 50, 51, 52, 53, 54, 55, 56, 57].contains(units[indicatorEnd]) {
+            while indicatorEnd < units.count, [43, 45, 49, 50, 51, 52, 53, 54, 55, 56, 57].contains(units[indicatorEnd]),
+                  hasTime(at: indicatorEnd) {
                 indicatorEnd += 1
             }
             let following = skippingSpaces(from: indicatorEnd)
@@ -196,7 +203,7 @@ enum ConfigurationHighlighting {
             if following < headerEnd { emit(following, headerEnd, .comment) }
             let bodyStart = nextLine(after: headerEnd)
             var end = bodyStart
-            while end < units.count, ProcessInfo.processInfo.systemUptime < deadline {
+            while end < units.count, SourceHighlighting.hasTime(until: deadline) {
                 let contentStart = skippingSpaces(from: end)
                 if contentStart < units.count, !isNewline(units[contentStart]), contentStart - end <= indentation { break }
                 let next = nextLine(after: lineEnd(from: contentStart))
@@ -209,7 +216,7 @@ enum ConfigurationHighlighting {
         }
 
         mutating func assignments(kind: DocumentKind, limit: Int) {
-            while cursor < min(limit, units.count), ProcessInfo.processInfo.systemUptime < deadline {
+            while cursor < min(limit, units.count), SourceHighlighting.hasTime(until: deadline) {
                 cursor = skippingSpaces(from: cursor)
                 guard cursor < units.count else { return }
                 if isNewline(units[cursor]) { cursor = nextLine(after: cursor); continue }

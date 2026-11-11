@@ -129,8 +129,14 @@ import WebKit
         let external = "磁盘加载\n甲\n乙\n"
         try Data(external.utf8).write(to: url, options: .atomic)
         await document.session.reload(force: true)?.value
-        try await wait("外部加载同步正文和统计") {
-            text.string == external && document.session.editorStatistics.total == expected(external)
+        try await ExternalChangeCheck.confirm(document)
+        do {
+            try await wait("外部加载同步正文和统计") {
+                text.string == external && document.session.editorStatistics.total == expected(external)
+            }
+        } catch {
+            print("外部加载诊断：正文=\(text.string.debugDescription)，会话=\(document.session.state.text.debugDescription)，统计=\(document.session.editorStatistics.total)，预期=\(expected(external))，修订=\(document.session.state.revision)，应用修订=\(coordinator.appliedRevision)，组合=\(text.hasMarkedText())，冲突=\(document.session.state.hasConflict)")
+            throw error
         }
         document.session.mode = .read
         try await wait("返回阅读保留全文并清除旧选区") {
@@ -140,6 +146,7 @@ import WebKit
         let refreshed = external + "刷新后的行\n"
         try Data(refreshed.utf8).write(to: url, options: .atomic)
         await document.session.reload(force: true)?.value
+        try await ExternalChangeCheck.confirm(document)
         try await wait("排版阅读外部刷新更新全文统计") { document.session.editorStatistics.total == expected(refreshed) }
 
         for suffix in ["txt", "json", "xml", "yaml", "toml", "ini", "conf", "env", "properties", "jsonc"] {

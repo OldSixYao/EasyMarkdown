@@ -32,6 +32,8 @@ final class DocumentSession {
     var mode: ViewMode = .read {
         didSet {
             if mode != oldValue {
+                // 保存完成返回排版阅读时，交接仍挂载的源码视口。
+                pendingReaderSourcePosition = oldValue == .edit && mode == .read && !usesNativeReader ? captureSourcePosition?() : nil
                 statisticsSelectionOwner = nil
                 editorStatistics.selection = nil
                 readingStatisticsRevision = nil
@@ -58,9 +60,14 @@ final class DocumentSession {
     var scrollTarget: String?
     var scrollRequest = 0
     var status = ""
-    var errorMessage: String?
+    var errorMessage: String? {
+        didSet { if errorMessage == nil { externalChangePrompt.schedule() } }
+    }
     var recovery: RecoveryDraft?
-    var isSaving = false
+    var isSaving = false {
+        didSet { if !isSaving { externalChangePrompt.schedule() } }
+    }
+    private(set) var isLoadingExternal = false
     var isFormatting = false
     var saveFailure: String?
     var saveStateLabel: String {
@@ -68,7 +75,9 @@ final class DocumentSession {
         if state.isDirty { return saveFailure == nil ? L10n.text("未保存") : L10n.text("保存失败 · 未保存") }
         return L10n.text("已保存")
     }
-    var showExternal = false
+    var showExternal = false {
+        didSet { if !showExternal { externalChangePrompt.schedule() } }
+    }
     var synchronizeSplitScroll = true
     @ObservationIgnored weak var document: MarkdownDocument?
     @ObservationIgnored let store = FileStore()
@@ -76,6 +85,9 @@ final class DocumentSession {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var externalLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var externalLoadGeneration = 0
+    @ObservationIgnored lazy var externalChangePrompt = ExternalChangePrompt(session: self)
     @ObservationIgnored private var draftTask: Task<Void, Never>?
     @ObservationIgnored private var draftWriteTask: Task<Void, Never>?
     @ObservationIgnored private var firstPendingDraftEdit: ContinuousClock.Instant?
@@ -89,7 +101,7 @@ final class DocumentSession {
     @ObservationIgnored private var reloadAgainForce = false
     var isWindowActive = true
     @ObservationIgnored private var lastSignature: String?
-    @ObservationIgnored private var closed = false
+    @ObservationIgnored private(set) var closed = false
     @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored private(set) var reloadReadCount = 0
     @ObservationIgnored var replaceText: ((String) -> Void)?
@@ -99,6 +111,8 @@ final class DocumentSession {
     @ObservationIgnored var scrollPreviewTo: ((SplitScrollPosition) -> Void)?
     @ObservationIgnored var alignPreviewToEditor: (() -> Void)?
     @ObservationIgnored var captureSourcePosition: (() -> SplitScrollPosition?)?
+    @ObservationIgnored private(set) var normalizedSaveRevision: UInt64?
+    @ObservationIgnored var pendingReaderSourcePosition: SplitScrollPosition?
 
     private var sourcePositionKey: String? {
         guard let url else { return nil }
@@ -203,6 +217,7 @@ final class DocumentSession {
         isWindowActive = active
         previewActivity.update(active: active, needed: kind == .markdown && mode != .edit)
         if active && changed { scheduleReload() }
+        if active { externalChangePrompt.schedule() }
     }
 
     func updateWindowActivity() {
@@ -214,6 +229,8 @@ final class DocumentSession {
 
     func start() {
         closed = false
+        cancelExternalLoad()
+        externalChangePrompt.start()
         if loadTask != nil {
             loadTask?.cancel()
             loadTask = nil
@@ -238,10 +255,12 @@ final class DocumentSession {
             }
         }
         if let url {
+            let baselineID = state.baseline.identity
             Task { [weak self] in
                 do {
                     let draft = try await DraftStore.shared.load(url)
-                    guard let self, !self.closed, let draft, draft.text != self.state.text else { return }
+                    guard let self, !self.closed, self.url == url, self.state.baseline.identity == baselineID,
+                          let draft, draft.text != self.state.text else { return }
                     self.recovery = draft
                 } catch { self?.errorMessage = L10n.format("恢复草稿无法读取：%@", error.localizedDescription) }
             }
@@ -251,6 +270,8 @@ final class DocumentSession {
     func stop(discardDraft: Bool) {
         if usesNativeReader, let position = captureSourcePosition?() { saveSourcePosition(position) }
         closed = true
+        cancelExternalLoad()
+        externalChangePrompt.stop()
         previewActivity.stop()
         cancelFormatting()
         pollTask?.cancel(); reloadTask?.cancel(); loadTask?.cancel(); draftTask?.cancel(); draftWriteTask?.cancel(); statusTask?.cancel()
@@ -266,6 +287,7 @@ final class DocumentSession {
         pendingEditorFind = nil
         scrollEditorTo = nil; scrollPreviewTo = nil; alignPreviewToEditor = nil
         captureSourcePosition = nil
+        pendingReaderSourcePosition = nil
         recovery = nil
         headings = []
         activeHeadingID = nil
@@ -302,7 +324,7 @@ final class DocumentSession {
 
     @discardableResult
     func reload(force: Bool) -> Task<Void, Never>? {
-        guard !closed, !isSaving, let url else { return nil }
+        guard !closed, !isSaving, !isLoadingExternal, let url else { return nil }
         if let loadTask {
             reloadAgain = true
             reloadAgainForce = reloadAgainForce || force
@@ -321,13 +343,9 @@ final class DocumentSession {
                 guard !Task.isCancelled, let self, !self.closed, self.url == url,
                       !self.isSaving, generation == self.reloadGeneration else { return }
                 self.reloadReadCount += 1
-                let changed = snapshot.data != self.state.baseline.data
-                let oldRevision = self.state.revision
                 self.state.receive(snapshot)
-                if oldRevision != self.state.revision { self.cancelFormatting() }
                 self.lastSignature = signature
-                self.synchronizeDirtyState()
-                if changed && !self.state.hasConflict { self.flash(L10n.text("已加载最新内容")) }
+                self.externalChangePrompt.schedule()
             } catch {
                 guard !Task.isCancelled else { return }
                 let missing = await store.isMissing(url)
@@ -336,6 +354,7 @@ final class DocumentSession {
                 // Atomic replacement can briefly remove the path. Retry through the poll loop.
                 if missing { self.state.markMissing() }
                 else { self.status = L10n.format("暂时无法更新：%@", error.localizedDescription) }
+                self.externalChangePrompt.schedule()
             }
         }
         return loadTask
@@ -353,6 +372,10 @@ final class DocumentSession {
     }
 
     func edit(_ text: String, change: TextChange? = nil) {
+        if isLoadingExternal {
+            cancelExternalLoad()
+            externalChangePrompt.schedule(manual: true)
+        }
         cancelFormatting()
         state.edit(text, change: change)
         synchronizeDirtyState()
@@ -410,16 +433,20 @@ final class DocumentSession {
 
     func restoreDraft() {
         guard let recovery else { return }
+        cancelExternalLoad()
         cancelFormatting()
-        let current = state.baseline
+        let current = state.external ?? state.baseline
+        let missing = state.isMissing
         do {
             state = DocumentState(snapshot: try FileSnapshot(data: recovery.baseline))
             state.text = recovery.text
-            state.receive(current)
+            if missing { state.markMissing() }
+            else { state.receive(current) }
             mode = .edit
             self.recovery = nil
             synchronizeDirtyState()
             scheduleDraft()
+            externalChangePrompt.schedule()
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -429,15 +456,65 @@ final class DocumentSession {
     }
 
     func acceptExternal() {
-        let alert = NSAlert()
-        alert.messageText = L10n.text("加载外部版本？")
-        alert.informativeText = L10n.text("本地尚未保存的修改将被放弃。你也可以先将本地内容另存为。")
-        alert.addButton(withTitle: L10n.text("加载外部版本")); alert.addButton(withTitle: L10n.text("取消"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        externalChangePrompt.schedule(manual: true)
+    }
+
+    private func cancelExternalLoad() {
+        externalLoadGeneration += 1
+        externalLoadTask?.cancel()
+        externalLoadTask = nil
+        isLoadingExternal = false
+    }
+
+    func loadLatestExternal(expectedRevision: UInt64, from url: URL) {
+        guard !closed, !isSaving, self.url == url, state.revision == expectedRevision else { return }
         cancelFormatting()
-        state.acceptExternal()
-        document?.undoManager?.removeAllActions()
-        synchronizeDirtyState(); scheduleDraft()
+        cancelExternalLoad()
+        loadTask?.cancel()
+        loadTask = nil
+        reloadGeneration += 1
+        reloadAgain = false
+        reloadAgainForce = false
+        let generation = externalLoadGeneration
+        let baselineID = state.baseline.identity
+        isLoadingExternal = true
+        externalLoadTask = Task { [weak self, store] in
+            do {
+                let snapshot = try await store.read(url)
+                guard !Task.isCancelled, let self, !self.closed, self.url == url,
+                      generation == self.externalLoadGeneration, !self.isSaving,
+                      self.state.revision == expectedRevision, self.state.baseline.identity == baselineID else { return }
+                self.externalLoadTask = nil
+                self.isLoadingExternal = false
+                self.state.acceptExternal(snapshot)
+                self.document?.undoManager?.removeAllActions()
+                self.saveFailure = nil
+                self.recovery = nil
+                self.draftTask?.cancel()
+                self.draftWriteTask?.cancel()
+                self.draftWriteTask = nil
+                self.firstPendingDraftEdit = nil
+                self.synchronizeDirtyState()
+                self.refreshReadingStatistics()
+                // 与旧草稿写入使用同一串行服务；若继续输入，再排队写入新草稿。
+                self.flushDraft()
+                self.lastSignature = nil
+                self.flash(L10n.text("已加载最新内容"))
+                self.externalChangePrompt.schedule()
+                self.scheduleReload()
+            } catch {
+                guard !Task.isCancelled else { return }
+                let missing = await store.isMissing(url)
+                guard !Task.isCancelled, let self, !self.closed, self.url == url,
+                      generation == self.externalLoadGeneration else { return }
+                self.externalLoadTask = nil
+                self.isLoadingExternal = false
+                if missing { self.state.markMissing() }
+                else { self.state.keepCurrentContent() }
+                self.errorMessage = missing ? DocumentError.missingFile.localizedDescription :
+                    L10n.format("无法加载最新内容，当前内容已保留：%@", error.localizedDescription)
+            }
+        }
     }
 
     func save(finishing: Bool = false) {
@@ -451,6 +528,8 @@ final class DocumentSession {
 
     func performSave(to target: URL, operation: NSDocument.SaveOperationType) async throws {
         guard !isSaving else { throw CocoaError(.userCancelled) }
+        cancelExternalLoad()
+        externalChangePrompt.cancel()
         cancelFormatting()
         isSaving = true
         defer { isSaving = false }
@@ -475,7 +554,9 @@ final class DocumentSession {
         draftWriteTask?.cancel()
         draftWriteTask = nil
         firstPendingDraftEdit = nil
+        let revisionBeforeSave = state.revision
         state.didSave(snapshot, savedText: savedText)
+        normalizedSaveRevision = state.revision == revisionBeforeSave ? nil : state.revision
         document?.fileURL = target
         previewActivity.update(active: isWindowActive, needed: kind == .markdown && mode != .edit)
         document?.fileModificationDate = try? target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
@@ -485,6 +566,11 @@ final class DocumentSession {
         synchronizeDirtyState()
         watchDirectory()
         flash(L10n.text("已保存"))
+    }
+
+    func prepareForSavePanel() {
+        cancelExternalLoad()
+        externalChangePrompt.cancel()
     }
 
     func saveAs() { document?.saveAs(nil) }

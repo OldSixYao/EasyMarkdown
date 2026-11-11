@@ -198,3 +198,9 @@
 "共 %d 行 · %d 字符" = "Total lines: %d · Characters: %d";
 "已选 %d 行 · %d 字符" = "Selected lines: %d · Characters: %d";
 "字符数不含空白字符" = "Character counts exclude whitespace";
+"文档「%@」已在其他位置修改，是否更新为最新内容？" = "“%@” was modified elsewhere. Update to the latest contents?";
+"更新将放弃当前尚未保存的修改。" = "Updating will discard your unsaved changes.";
+"确定" = "OK";
+"否" = "No";
+"当前内容已保留，外部版本尚未加载。" = "Current contents kept. The external version has not been loaded.";
+"无法加载最新内容，当前内容已保留：%@" = "Could not load the latest contents. Current contents kept: %@";

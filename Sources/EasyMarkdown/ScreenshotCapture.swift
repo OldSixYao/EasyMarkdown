@@ -31,11 +31,11 @@ import EasyMarkdownCore
 
             macOS 原生 Markdown 阅读与编辑工具。打开文件即可阅读，修改时切换到源码或分栏预览。
 
-            ## 阅读与实时更新
+            ## 阅读与确认更新
 
-            在其他编辑器中修改并保存，这里的内容会自动刷新，并尽量保持当前阅读位置。左侧大纲会高亮正在阅读的章节。
+            在其他编辑器中修改并保存，回到这里后确认更新，或点击“否”保留当前内容。左侧大纲会高亮正在阅读的章节。
 
-            > 本地有未保存修改时，外部更新不会覆盖你的编辑。
+            > 确认更新会放弃尚未保存的修改，点击“否”或按退出键可保留。
 
             ## 编辑与分栏预览
 
@@ -57,7 +57,7 @@ import EasyMarkdownCore
 
             ```swift
             let document = "EasyMarkdown"
-            let liveReload = true
+            let confirmExternalChanges = true
             print("安静阅读，随手修改。")
             ```
 

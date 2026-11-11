@@ -277,12 +277,12 @@ struct DocumentView: View {
     private var conflictBanner: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-            Text(session.state.isMissing ? L10n.text("原文件已移动或删除，当前内容已保留。") : L10n.text("文件已在其他位置修改，本地编辑已保留。"))
+            Text(session.state.isMissing ? L10n.text("原文件已移动或删除，当前内容已保留。") : L10n.text("当前内容已保留，外部版本尚未加载。"))
                 .font(.callout)
             Spacer(minLength: 0)
             if session.state.external != nil {
                 Button(L10n.text("查看外部版本")) { session.showExternal = true }
-                Button(L10n.text("加载外部版本")) { session.acceptExternal() }
+                Button(L10n.text("加载外部版本")) { session.acceptExternal() }.disabled(session.isLoadingExternal)
             }
             Button(L10n.text("另存为…")) { session.saveAs() }
         }.padding(12).background(.orange.opacity(0.09))

@@ -55,6 +55,7 @@ struct MarkdownPreview: NSViewRepresentable {
         coordinator.isDisposed = true
         coordinator.renderTask?.cancel()
         coordinator.searchTask?.cancel()
+        coordinator.alignmentTask?.cancel()
         coordinator.renderTask = nil
         coordinator.ready = false
         coordinator.previousRevision = nil
@@ -90,6 +91,7 @@ struct MarkdownPreview: NSViewRepresentable {
         var rendering = false
         var pendingScroll: SplitScrollPosition?
         var hasAlignedScroll = false
+        var alignmentTask: Task<Void, Never>?
         var scrolling = false
         var renderTask: Task<Void, Never>?
         var isDisposed = false
@@ -130,8 +132,8 @@ struct MarkdownPreview: NSViewRepresentable {
 
         private func flushScroll() {
             guard ready, !rendering, !scrolling, let webView, let position = pendingScroll,
-                  parent.overrideText == nil, parent.session.mode == .split,
-                  parent.session.synchronizeSplitScroll else { return }
+                  parent.overrideText == nil,
+                  parent.session.mode == .read || (parent.session.mode == .split && parent.session.synchronizeSplitScroll) else { return }
             pendingScroll = nil
             scrolling = true
             webView.callAsyncJavaScript("window.synchronizeSourceScroll(position)",
@@ -163,15 +165,7 @@ struct MarkdownPreview: NSViewRepresentable {
 
         func update() {
             guard ready, !isDisposed, let webView else { return }
-            if !hasAlignedScroll && previousRevision != nil && !rendering,
-               parent.overrideText == nil && parent.session.mode == .split {
-                hasAlignedScroll = true
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .milliseconds(100))
-                    guard let self, !self.isDisposed else { return }
-                    self.parent.session.alignPreviewToEditor?()
-                }
-            }
+            alignSourcePositionIfNeeded()
             resources.root = parent.session.url?.deletingLastPathComponent()
             resources.remoteImages = parent.remoteImages
             let preferences: [String: Any] = ["fontSize": parent.fontSize, "width": parent.width,
@@ -206,6 +200,28 @@ struct MarkdownPreview: NSViewRepresentable {
                 previousScrollRequest = parent.session.scrollRequest
                 webView.callAsyncJavaScript("document.getElementById(target)?.scrollIntoView()",
                     arguments: ["target": target], in: nil, in: .page, completionHandler: nil)
+            }
+        }
+
+        private func alignSourcePositionIfNeeded() {
+            guard !rendering, contentIsCurrent, parent.overrideText == nil, alignmentTask == nil else { return }
+            let session = parent.session
+            guard (session.mode == .read && session.pendingReaderSourcePosition != nil) ||
+                    (session.mode == .split && !hasAlignedScroll) else { return }
+            alignmentTask = Task { @MainActor [weak self] in
+                // 阅读页也会分帧恢复布局，等它结束后再交接当前源码位置。
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled, let self, !self.isDisposed else { return }
+                self.alignmentTask = nil
+                guard !self.rendering, self.contentIsCurrent else { self.update(); return }
+                let session = self.parent.session
+                if session.mode == .read, let position = session.pendingReaderSourcePosition {
+                    session.pendingReaderSourcePosition = nil
+                    self.synchronizeScroll(position)
+                } else if session.mode == .split && !self.hasAlignedScroll {
+                    self.hasAlignedScroll = true
+                    session.alignPreviewToEditor?()
+                }
             }
         }
 
@@ -286,14 +302,6 @@ struct MarkdownPreview: NSViewRepresentable {
                         self.parent.session.previewActivity.didRender()
                     }
                     self.update()
-                    if !self.hasAlignedScroll && self.parent.overrideText == nil && self.parent.session.mode == .split {
-                        self.hasAlignedScroll = true
-                        // Wait for the reader's initial position restoration to finish.
-                        Task { @MainActor [weak self] in
-                            try? await Task.sleep(for: .milliseconds(100))
-                            self?.parent.session.alignPreviewToEditor?()
-                        }
-                    }
                     self.flushScroll()
                 }
             }
