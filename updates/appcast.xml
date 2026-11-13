@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>EasyMarkdown</title>
         <item>
+            <title>0.1.40</title>
+            <pubDate>Fri, 13 Nov 2026 15:49:46 +0800</pubDate>
+            <link>https://github.com/OldSixYao/EasyMarkdown</link>
+            <sparkle:version>41</sparkle:version>
+            <sparkle:shortVersionString>0.1.40</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<ul><li>只读模式下在文档正文按回车或数字键盘回车时，也显示是否开始编辑的确认框；确定后进入源码编辑，取消继续阅读，触发提示的回车不写入换行。</li><li>保留查找框、复制按钮和确认框的回车操作，增加两种回车、取消后长按去重及回车确认进入编辑的真实窗口检查。</li></ul>]]></description>
+            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.40/EasyMarkdown-0.1.40-arm64.dmg" length="2778044" type="application/octet-stream" sparkle:edSignature="Yv/OvP80vYhtwxIhf7aemTR+bvhtwcZ4cnFqWuuRUSEoMD8jsa8YsYAf6xWa0pVoD9kEH6Vy9VrlFjzvCS/lCA=="/>
+        </item>
+        <item>
             <title>0.1.36</title>
             <pubDate>Wed, 11 Nov 2026 13:07:32 +0800</pubDate>
             <link>https://github.com/OldSixYao/EasyMarkdown</link>
@@ -27,20 +38,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <description><![CDATA[<ul><li>文档底部状态栏改为在阅读、源码编辑和分栏模式下常驻显示全文总行数与字符数，外部内容刷新后同步更新。</li><li>原生文本视图在鼠标拖选过程中持续更新已选行数和字符数，更新在鼠标跟踪运行循环中生效，无需等待松开鼠标；键盘扩选与取消选择同步更新。</li><li>排版阅读新增可见文字选区统计，分栏中的选区统计跟随当前操作窗格；全文保持原文统计口径，字符数仍排除空白。</li><li>切换模式清理旧选区，外部版本预览继续独立；补充阅读选区、分栏切换和拖选期间实际状态栏文字的窗口检查。</li></ul>]]></description>
             <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.33/EasyMarkdown-0.1.33-arm64.dmg" length="2757717" type="application/octet-stream" sparkle:edSignature="N5mQ8lCkRjzHYPxfKhiLRqSeODrbh1x7m+s74VRJw82f7oYgMUQCY1yUxMTUptgwjWHkk9mrvPIpBOsle84FCA=="/>
         </item>
-        <item>
-            <title>0.1.27</title>
-            <pubDate>Mon, 09 Nov 2026 15:43:16 +0800</pubDate>
-            <link>https://github.com/OldSixYao/EasyMarkdown</link>
-            <sparkle:version>28</sparkle:version>
-            <sparkle:shortVersionString>0.1.27</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<ul><li>编辑状态按内容修订号和实际编辑区间更新，缓存未保存状态与字节数，减少大文档输入和滚动时的重复全文比较。</li><li>统一预览长度限制，覆盖组合表情和超长组合字符；改进多处修改的内容块复用，并分离样式更新与正文解析。</li><li>合并同目录文件监听和重复刷新，过滤无关目录事件，降低后台补偿轮询频率。</li><li>草稿基线独立保存，当前内容原子写入，兼容旧草稿，并为持续输入保留定期恢复点。</li><li>增加图片总量预算和视口资源管理，减少多图及后台窗口的常驻占用。</li><li>纯文本与配置文件使用原生只读视图，文档标记阅读视图支持后台休眠和状态恢复。</li><li>补充编辑、预览、草稿、图片和窗口生命周期回归及前后性能对照。</li></ul>]]></description>
-            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.27/EasyMarkdown-0.1.27-arm64.dmg" length="2549051" type="application/octet-stream" sparkle:edSignature="8GOlJIbol7waJfOOUR7T2fuEYFddB7Oc0WDQLxGOP0f5YLKb4UNtbI7lPyVGrexzalid5XGXtkmPjUMVEPY2AQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: zbqPlbjrgmDW4ehMU+yo7VQPlAoJVxd3Z8pAciQ6TCObgP0gE2mJmli0SfrDJcbbiE7b5Yv5wN01SNEroNBLCQ==
-length: 5317
+edSignature: zNW3W+aTeV5KxDE6cc2ULRaJSEfycFP8um4/mGTqqWZ39/utJ4WoDSsWg5u3UakpzKVHvGUTcST1vhx+zaarCQ==
+length: 4810
 -->
