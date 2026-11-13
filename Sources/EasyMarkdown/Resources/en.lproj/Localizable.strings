@@ -155,6 +155,13 @@
 "默认编辑器" = "Default Editor";
 "文件类型" = "File Type";
 "设为默认" = "Make Default";
+"当前是只读模式，是否开始编辑？" = "This document is read-only. Start editing?";
+"全部设为默认" = "Make All Default";
+"将列表中的全部文件类型（含自定义后缀）设为由 EasyMarkdown 默认打开。" = "Use EasyMarkdown as the default app for every file type in this list, including custom extensions.";
+"正在设置全部文件类型…" = "Setting defaults for all file types…";
+"全部 %d 种文件类型已设为默认。" = "All %d file types now open with EasyMarkdown by default.";
+"有 %d 种文件类型未设为默认：%@。" = "EasyMarkdown is not the default for %d file types: %@.";
+"系统返回：%@" = "System response: %@";
 "正在设置默认编辑器…" = "Setting default editor…";
 "EasyMarkdown 已是此类型的默认应用。" = "EasyMarkdown is the default app for this type.";
 "当前默认应用：%@" = "Current default app: %@";

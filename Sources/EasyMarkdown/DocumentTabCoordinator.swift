@@ -199,4 +199,20 @@ import AppKit
 
 @MainActor final class DocumentWindow: NSWindow {
     override func newWindowForTab(_ sender: Any?) { DocumentTabCoordinator.shared.newTab(sender) }
+
+    override func sendEvent(_ event: NSEvent) {
+        if handleReadOnlyInput(event) { return }
+        super.sendEvent(event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // 剪切、粘贴会先经过快捷键分发，不进入普通键盘分发。
+        if handleReadOnlyInput(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    private func handleReadOnlyInput(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, let document = windowController?.document as? MarkdownDocument else { return false }
+        return document.session.readOnlyEditPrompt.handle(event, in: self)
+    }
 }

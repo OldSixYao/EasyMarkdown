@@ -61,6 +61,8 @@ import EasyMarkdownCore
             }
             welcome.close()
             results.append("Welcome opens at 720 × 560 with a 640 × 520 minimum and supports resizing")
+            try await ReadOnlyEditCheck.run(directory: output.appendingPathComponent("read-only-edit", isDirectory: true))
+            results.append("阅读模式输入文字、删除或剪切粘贴时先确认，取消保留正文与选区，确定后聚焦编辑；导航、复制、查找及其他面板保持正常")
             try await ExternalChangeCheck.run(directory: output)
             results.append("外部修改经窗口确认后载入；拒绝、退出键、去重、后台延后、读取失败和过期载入保护通过")
             try await EditorWorkspaceCheck.check(directory: output.appendingPathComponent("editor-workspace"))
@@ -352,6 +354,10 @@ import EasyMarkdownCore
             try await ConfigurationCheck.associations()
             results.append("Configuration defaults are explicit and scoped to the selected format, with stable Finder types and extension aliases; dotenv variants do not claim .local files")
             try await ConfigurationCheck.customExtensions(directory: output)
+            try await DefaultEditorCheck.applicationCopies(directory: output)
+            try await DefaultEditorCheck.batchAssociations()
+            try await DefaultEditorCheck.list(directory: output)
+            try await DefaultEditorCheck.liveAssociations(directory: output)
             results.append("Every default-editor row reflects system state; custom extensions validate, deduplicate and persist, set only the selected type, and remove without changing defaults")
             let report = ["status": "passed", "checks": results] as [String: Any]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])

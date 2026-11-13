@@ -139,6 +139,14 @@ struct SourceEditor: NSViewRepresentable {
         context.coordinator.updateLineNumbers(scroll, visible: showLineNumbers && !isReadOnly && !isSecondary && overrideText == nil)
         text.setAccessibilityLabel(L10n.text(isReadOnly ? "文档内容" : "文档源码编辑器"))
         coordinator.scheduleStatistics()
+        if !isReadOnly, !isSecondary, overrideText == nil, coordinator.focusRequest != session.editorFocusRequest {
+            coordinator.focusRequest = session.editorFocusRequest
+            DispatchQueue.main.async { [weak text, weak coordinator] in
+                guard let text, let coordinator, !coordinator.session.closed, text.isEditable,
+                      let window = text.window, window.attachedSheet == nil else { return }
+                window.makeFirstResponder(text)
+            }
+        }
         if !isSecondary && overrideText == nil && session.pendingEditorFind != nil {
             DispatchQueue.main.async { [weak coordinator = context.coordinator] in
                 coordinator?.session.flushEditorFindRequest()
@@ -178,6 +186,7 @@ struct SourceEditor: NSViewRepresentable {
         var scrollObserver: NSObjectProtocol?
         var synchronizedY: CGFloat?
         var updatingText = false
+        var focusRequest = 0
         var appliedRevision: UInt64
         let isSecondary: Bool
         let isOverride: Bool

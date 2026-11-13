@@ -55,6 +55,7 @@ final class DocumentSession {
     var searchResultCount: Int?
     var searchIsTruncated = false
     var pendingEditorFind: EditorFindRequest?
+    var editorFocusRequest = 0
     var headings: [Heading] = []
     var activeHeadingID: String?
     var scrollTarget: String?
@@ -88,6 +89,7 @@ final class DocumentSession {
     @ObservationIgnored private var externalLoadTask: Task<Void, Never>?
     @ObservationIgnored private var externalLoadGeneration = 0
     @ObservationIgnored lazy var externalChangePrompt = ExternalChangePrompt(session: self)
+    @ObservationIgnored lazy var readOnlyEditPrompt = ReadOnlyEditPrompt(session: self)
     @ObservationIgnored private var draftTask: Task<Void, Never>?
     @ObservationIgnored private var draftWriteTask: Task<Void, Never>?
     @ObservationIgnored private var firstPendingDraftEdit: ContinuousClock.Instant?
@@ -270,6 +272,7 @@ final class DocumentSession {
     func stop(discardDraft: Bool) {
         if usesNativeReader, let position = captureSourcePosition?() { saveSourcePosition(position) }
         closed = true
+        readOnlyEditPrompt.stop()
         cancelExternalLoad()
         externalChangePrompt.stop()
         previewActivity.stop()

@@ -9,8 +9,8 @@
   <key>CFBundleExecutable</key><string>EasyMarkdown</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.1.36</string>
-  <key>CFBundleVersion</key><string>37</string>
+  <key>CFBundleShortVersionString</key><string>0.1.39</string>
+  <key>CFBundleVersion</key><string>40</string>
   <key>SUPublicEDKey</key><string>xyWDgXxubU9w2tFFLz6F0yKt1pXXlN2zHvq9gFHIuRM=</string>
   <key>SUFeedURL</key><string>https://raw.githubusercontent.com/OldSixYao/EasyMarkdown/main/updates/appcast.xml</string>
   <key>SUEnableAutomaticChecks</key><true/>

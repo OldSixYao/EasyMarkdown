@@ -82,8 +82,8 @@ enum DefaultEditorFormat: Hashable, CaseIterable {
     }
 }
 
-struct DefaultEditorAssociation {
-    enum State { case current, partial, other, unset }
+struct DefaultEditorAssociation: Equatable {
+    enum State: Equatable { case current, partial, other, unset }
     let state: State
     let applicationName: String?
 
@@ -104,14 +104,19 @@ struct DefaultEditorAssociation {
         didSet { if format != oldValue { refresh() } }
     }
     private(set) var isSetting = false
+    private(set) var isSettingAll = false
     private(set) var isDefault = false
     private(set) var errorMessage: String?
     private(set) var currentApplicationName: String?
     private(set) var customExtensions: [String] = []
     private(set) var associations: [DefaultEditorFormat: DefaultEditorAssociation] = [:]
     private(set) var extensionError: String?
+    private(set) var selectionRequest = 0
+    private(set) var batchMessage: String?
     var formats: [DefaultEditorFormat] { customExtensions.reversed().map { .custom($0) } + DefaultEditorFormat.allCases }
+    var allDefault: Bool { formats.allSatisfy { association(for: $0).state == .current } }
     let applicationURL: URL
+    @ObservationIgnored private let applicationIdentifier: String?
     @ObservationIgnored private let preferences: UserDefaults
     private static let extensionsKey = "customEditorExtensions"
     @ObservationIgnored private let query: (UTType) -> URL?
@@ -131,6 +136,7 @@ struct DefaultEditorAssociation {
          canSet: (() -> Bool)? = nil,
          preferences: UserDefaults = .standard) {
         self.applicationURL = applicationURL
+        self.applicationIdentifier = Bundle(url: applicationURL)?.bundleIdentifier
         self.query = query
         self.set = set
         self.preferences = preferences
@@ -149,7 +155,9 @@ struct DefaultEditorAssociation {
     }
 
     var status: String {
+        if isSettingAll { return L10n.text("正在设置全部文件类型…") }
         if isSetting { return L10n.text("正在设置默认编辑器…") }
+        if let batchMessage { return batchMessage }
         if isDefault { return L10n.text("EasyMarkdown 已是此类型的默认应用。") }
         if let currentApplicationName { return L10n.format("当前默认应用：%@", currentApplicationName) }
         return L10n.text("此类型尚未设置默认应用。")
@@ -158,6 +166,7 @@ struct DefaultEditorAssociation {
     func refresh() {
         guard !isSetting else { return }
         errorMessage = nil
+        batchMessage = nil
         for format in formats { readStatus(for: format) }
     }
 
@@ -174,6 +183,7 @@ struct DefaultEditorAssociation {
         }
         if let existing = formats.first(where: { $0.extensions.contains(ext) }) {
             format = existing
+            selectionRequest += 1
             extensionError = L10n.text("此后缀已在列表中，已选中对应类型。")
             return false
         }
@@ -193,16 +203,25 @@ struct DefaultEditorAssociation {
         format = .markdown
     }
 
+    private func isCurrentApplication(_ candidate: URL?) -> Bool {
+        guard let candidate = candidate?.resolvingSymlinksInPath().standardizedFileURL else { return false }
+        if candidate == applicationURL.resolvingSymlinksInPath().standardizedFileURL { return true }
+        // 系统按应用标识保存文件关联，可能返回应用程序目录中的另一份安装副本。
+        guard let applicationIdentifier, !applicationIdentifier.isEmpty,
+              let candidateIdentifier = Bundle(url: candidate)?.bundleIdentifier else { return false }
+        return candidateIdentifier.caseInsensitiveCompare(applicationIdentifier) == .orderedSame
+    }
+
     private func readStatus(for format: DefaultEditorFormat) {
         let current = format.contentTypes.map { query($0)?.resolvingSymlinksInPath().standardizedFileURL }
-        let ours = applicationURL.resolvingSymlinksInPath().standardizedFileURL
+        let matches = current.map { isCurrentApplication($0) }
         let state: DefaultEditorAssociation.State
-        if current.allSatisfy({ $0 == ours }) { state = .current }
-        else if current.contains(ours) { state = .partial }
+        if matches.allSatisfy({ $0 }) { state = .current }
+        else if matches.contains(true) { state = .partial }
         else if current.contains(where: { $0 != nil }) { state = .other }
         else { state = .unset }
         let name: String?
-        if current.dropFirst().allSatisfy({ $0 == current[0] }) {
+        if state == .current || current.dropFirst().allSatisfy({ $0 == current[0] }) {
             name = current[0].map { FileManager.default.displayName(atPath: $0.path) }
         } else { name = L10n.text("多个应用") }
         associations[format] = DefaultEditorAssociation(state: state, applicationName: name)
@@ -214,6 +233,7 @@ struct DefaultEditorAssociation {
 
     func makeDefault() async {
         guard !isSetting else { return }
+        batchMessage = nil
         guard canSet() else {
             errorMessage = L10n.text("请将 EasyMarkdown 安装到 Applications，并运行应用后再设置默认编辑器。")
             return
@@ -235,5 +255,52 @@ struct DefaultEditorAssociation {
         isSetting = false
         // A custom suffix may share a system type with another row.
         for format in formats { readStatus(for: format) }
+    }
+
+    func makeAllDefault() async {
+        guard !isSetting else { return }
+        batchMessage = nil
+        guard canSet() else {
+            errorMessage = L10n.text("请将 EasyMarkdown 安装到 Applications，并运行应用后再设置默认编辑器。")
+            return
+        }
+        let targets = formats
+        isSetting = true
+        isSettingAll = true
+        errorMessage = nil
+        extensionError = nil
+        defer { isSetting = false; isSettingAll = false }
+
+        var seen = Set<String>()
+        let types = targets.flatMap(\.contentTypes).filter { seen.insert($0.identifier).inserted }
+        var failures: [String] = []
+        for type in types {
+            // 多个后缀可能共用同一类型；已经关联的类型无需再次请求系统确认。
+            if isCurrentApplication(query(type)) { continue }
+            do {
+                try Task.checkCancellation()
+                try await set(applicationURL, type)
+            } catch {
+                failures.append(error.localizedDescription)
+                let systemError = error as NSError
+                if error is CancellationError ||
+                    (systemError.domain == NSCocoaErrorDomain && systemError.code == NSUserCancelledError) ||
+                    (systemError.domain == NSOSStatusErrorDomain && systemError.code == -128) {
+                    break
+                }
+            }
+        }
+        for format in formats { readStatus(for: format) }
+        let incomplete = targets.filter { association(for: $0).state != .current }
+        if incomplete.isEmpty {
+            batchMessage = L10n.format("全部 %d 种文件类型已设为默认。", targets.count)
+        } else {
+            let summary = L10n.format("有 %d 种文件类型未设为默认：%@。", incomplete.count,
+                incomplete.map(\.title).joined(separator: "、"))
+            let detail = failures.isEmpty ?
+                L10n.text("系统尚未将此应用设为默认。请在 Finder 的“显示简介 → 打开方式”中选择 EasyMarkdown，再点击“全部更改”。") :
+                L10n.format("系统返回：%@", Array(Set(failures)).sorted().joined(separator: "\n"))
+            errorMessage = summary + "\n" + detail
+        }
     }
 }

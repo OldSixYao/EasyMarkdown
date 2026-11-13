@@ -43,6 +43,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--read-only-edit-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task {
+                do {
+                    try await ReadOnlyEditCheck.run(directory: output)
+                    print("PASS: 只读输入确认与编辑切换检查")
+                    NSApp.terminate(nil)
+                } catch { print("FAIL: \(error)"); exit(1) }
+            }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--external-change-test"),
            CommandLine.arguments.indices.contains(index + 1) {
             let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
@@ -85,6 +97,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            CommandLine.arguments.indices.contains(index + 1) {
             let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
             Task { await UpdateCheck.run(output: output) }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--default-editor-test"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            let output = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await DefaultEditorCheck.run(output: output) }
             return
         }
         if let index = CommandLine.arguments.firstIndex(of: "--configuration-test"),
@@ -347,9 +365,9 @@ private struct WelcomeView: View {
 
 private typealias SettingsState<Value> = State<Value>
 
-private struct SettingsView: View {
+@MainActor struct SettingsView: View {
     @ObservedObject var updates: UpdateController
-    @SettingsState private var defaultEditor = DefaultEditorSettings()
+    @SettingsState private var defaultEditor: DefaultEditorSettings
     @AppStorage(AppLanguage.preferenceKey) private var language = "system"
     @AppStorage("readerFontSize") var fontSize = 16.0
     @AppStorage("editorFontSize") var editorSize = 14.0
@@ -358,6 +376,11 @@ private struct SettingsView: View {
     @AppStorage("appearance") var appearance = "system"
     @AppStorage(EditorPreferences.showLineNumbers, store: EditorPreferences.store) private var showLineNumbers = true
     @AppStorage(EditorPreferences.documentTabsEnabled, store: EditorPreferences.store) private var documentTabsEnabled = true
+
+    init(updates: UpdateController, defaultEditor: DefaultEditorSettings? = nil) {
+        self.updates = updates
+        _defaultEditor = SettingsState(initialValue: defaultEditor ?? DefaultEditorSettings())
+    }
 
     var body: some View {
         Form {

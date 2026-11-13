@@ -15,7 +15,11 @@ import SwiftUI
             try await documents(directory: output)
             try await associations()
             try await customExtensions(directory: output)
-            let report: [String: Any] = ["status": "passed", "highlightingChecks": highlightingChecks, "scrollHighlightingChecks": scrollHighlightingChecks, "configurationDocuments": 11, "defaultEditorFormats": 7, "customExtensionsAndRowStatus": true]
+            try await DefaultEditorCheck.applicationCopies(directory: output)
+            try await DefaultEditorCheck.batchAssociations()
+            try await DefaultEditorCheck.list(directory: output)
+            try await DefaultEditorCheck.liveAssociations(directory: output)
+            let report: [String: Any] = ["status": "passed", "highlightingChecks": highlightingChecks, "scrollHighlightingChecks": scrollHighlightingChecks, "configurationDocuments": 11, "defaultEditorFormats": 7, "customExtensionsAndRowStatus": true, "defaultEditorScrollingAndBatch": true]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("report.json"))
             print("PASS: 11 configuration documents, 7 default-editor formats, custom extensions and per-row status")
