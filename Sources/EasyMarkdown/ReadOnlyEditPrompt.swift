@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 import EasyMarkdownCore
 
 /// 在文档窗口分发键盘事件前提示，覆盖原生阅读和网页排版阅读。
@@ -11,12 +12,27 @@ import EasyMarkdownCore
     func handle(_ event: NSEvent, in window: NSWindow) -> Bool {
         guard let session, !session.closed, session.mode == .read,
               isEditingKey(event), isDocumentFocused(in: window, session: session) else { return false }
-        if alert != nil { return true }
+        if event.keyCode == 36 || event.keyCode == 76 {
+            // 网页自行区分正文和已经聚焦的复制按钮，保留按钮的回车激活行为。
+            var view = window.firstResponder as? NSView
+            while let current = view {
+                if current is WKWebView { return false }
+                view = current.superview
+            }
+        }
+        // 长按后取消提示时，等待下一次独立按键，避免立即重复弹窗。
+        guard !event.isARepeat else { return true }
+        return request(in: window)
+    }
+
+    @discardableResult
+    func request(in window: NSWindow) -> Bool {
+        guard let session, !session.closed, session.mode == .read,
+              isDocumentFocused(in: window, session: session) else { return false }
         guard window.isKeyWindow, NSApp.isActive, window.attachedSheet == nil,
               NSApp.modalWindow == nil, !session.isSaving, !session.isLoadingExternal,
               !session.showExternal, session.errorMessage == nil else { return false }
-        // 长按后取消提示时，等待下一次独立按键，避免立即重复弹窗。
-        guard !event.isARepeat else { return true }
+        if alert != nil { return true }
 
         let alert = NSAlert()
         alert.alertStyle = .informational
@@ -63,8 +79,8 @@ import EasyMarkdownCore
             // 复制、查找和应用快捷键沿用原行为；剪切、粘贴表达编辑意图。
             return ["v", "x"].contains(event.charactersIgnoringModifiers?.lowercased() ?? "")
         }
-        if event.keyCode == 51 || event.keyCode == 117 { return true }
-        // 空格、回车、Tab、方向键和功能键用于阅读滚动、激活按钮及切换焦点。
+        if [36, 76, 51, 117].contains(event.keyCode) { return true }
+        // 空格、Tab、方向键和功能键用于阅读滚动、激活按钮及切换焦点。
         guard let characters = event.characters, !characters.isEmpty else { return false }
         return characters.unicodeScalars.contains {
             !CharacterSet.controlCharacters.contains($0) && !CharacterSet.whitespacesAndNewlines.contains($0) &&

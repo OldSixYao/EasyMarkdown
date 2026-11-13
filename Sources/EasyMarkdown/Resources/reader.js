@@ -52,6 +52,12 @@ document.addEventListener('keyup', () => {
   const selection = getSelection();
   if (selection?.anchorNode && content.contains(selection.anchorNode)) scheduleSelectionStatistics(true);
 });
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Enter' || event.isComposing || event.metaKey || event.ctrlKey) return;
+  if (event.target.closest('button,a[href],summary,input,textarea,select,[role="button"]')) return;
+  event.preventDefault();
+  if (!event.repeat) send('editRequest', true);
+});
 const copyTargets = new WeakMap();
 const readingTextCache = new WeakMap();
 const headingTitleCache = new WeakMap();

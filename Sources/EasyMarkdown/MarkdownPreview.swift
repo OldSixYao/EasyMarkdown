@@ -312,6 +312,9 @@ struct MarkdownPreview: NSViewRepresentable {
                   let type = body["type"] as? String else { return }
             switch type {
             case "ready": ready = true; update()
+            case "editRequest":
+                guard parent.overrideText == nil, let window = webView?.window else { return }
+                parent.session.readOnlyEditPrompt.request(in: window)
             case "headings":
                 guard parent.overrideText == nil, let payload = body["payload"],
                       let data = try? JSONSerialization.data(withJSONObject: payload),

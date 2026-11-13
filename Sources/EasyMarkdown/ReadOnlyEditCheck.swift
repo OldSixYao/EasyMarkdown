@@ -13,7 +13,8 @@ import EasyMarkdownCore
 
     private static func document(extension ext: String, directory: URL) async throws {
         print("只读检查：\(ext)，开始")
-        let source = ext == "json" ? "{\"message\": \"只读内容\"}\n" : "# 只读内容\n\n保留正文、位置和保存状态。\n"
+        let source = ext == "json" ? "{\"message\": \"只读内容\"}\n" :
+            "# 只读内容\n\n保留正文、位置和保存状态。\n" + (ext == "md" ? "\n`复制样例`\n" : "")
         let url = directory.appendingPathComponent("read-only." + ext)
         try Data(source.utf8).write(to: url)
         let document = MarkdownDocument(snapshot: try FileSnapshot(data: Data(source.utf8)), url: url)
@@ -36,6 +37,7 @@ import EasyMarkdownCore
             try await waitAsync("排版阅读就绪") {
                 (try? await web.evaluateJavaScript("document.querySelector('h1')?.textContent")) as? String == "只读内容"
             }
+            try await copyWithReturn(in: web, document: document, window: window)
         }
         window.makeFirstResponder(reader)
         let revision = session.state.revision
@@ -46,7 +48,6 @@ import EasyMarkdownCore
             ("\u{F72D}", UInt16(121), NSEvent.ModifierFlags()),
             (" ", UInt16(49), NSEvent.ModifierFlags()),
             ("\t", UInt16(48), NSEvent.ModifierFlags()),
-            ("\r", UInt16(36), NSEvent.ModifierFlags()),
             ("c", UInt16(8), NSEvent.ModifierFlags.command)
         ] {
             window.makeFirstResponder(reader)
@@ -56,6 +57,10 @@ import EasyMarkdownCore
         // 网页阅读在另一个进程处理按键，等导航及其未处理按键回传完成再发起确认。
         if reader is WKWebView { try await Task.sleep(for: .milliseconds(250)) }
         try require(prompt(document) == nil && session.mode == .read, "网页阅读按键延后触发了编辑确认")
+        if let web = reader as? WKWebView {
+            // Tab 导航可能选中复制按钮，正文回车检查应从正文焦点开始。
+            _ = try await web.evaluateJavaScript("document.activeElement.blur();true")
+        }
 
         let selected = (source as NSString).range(of: "只读内容")
         (reader as? NSTextView)?.setSelectedRange(selected)
@@ -79,6 +84,20 @@ import EasyMarkdownCore
                     "取消后未保留阅读模式及正文")
         if let text = reader as? NSTextView {
             try require(text.string == source && text.selectedRange() == selected, "取消后原生正文或选区改变")
+        }
+
+        for (characters, code) in [("\r", UInt16(36)), ("\u{3}", UInt16(76))] {
+            window.makeFirstResponder(reader)
+            send(characters, code: code, window: window)
+            try await wait("回车键触发只读编辑确认：\(code)") { prompt(document) != nil }
+            try require(session.mode == .read && session.state.text == source && session.state.revision == revision,
+                        "回车确认前修改了模式或正文")
+            try await respond(document, accept: false)
+            try require(session.mode == .read && !session.state.isDirty && session.state.text == source,
+                        "取消回车确认后未保留只读状态和正文")
+            window.makeFirstResponder(reader)
+            send(characters, code: code, repeatKey: true, window: window)
+            try require(prompt(document) == nil, "长按回车在取消后重复弹窗")
         }
 
         window.makeFirstResponder(reader)
@@ -108,6 +127,10 @@ import EasyMarkdownCore
         send("q", code: 12, window: window)
         try await wait("查找输入继续正常工作") { search.string.contains("q") }
         try require(prompt(document) == nil && session.mode == .read, "查找框输入触发了只读编辑确认")
+        send("\r", code: 36, window: window)
+        try await Task.sleep(for: .milliseconds(100))
+        try require(prompt(document) == nil && session.mode == .read && session.state.text == source,
+                    "查找框回车错误触发只读编辑确认或改变正文")
         session.closeSearch()
         try await Task.sleep(for: .milliseconds(100))
 
@@ -122,8 +145,8 @@ import EasyMarkdownCore
         try await wait("测试面板关闭并恢复文档焦点") { window.attachedSheet == nil && window.isKeyWindow }
 
         window.makeFirstResponder(reader)
-        send("a", code: 0, window: window)
-        try await respond(document, accept: true)
+        send("\r", code: 36, window: window)
+        try await respond(document, accept: true, usingReturn: true)
         var editor: NSTextView?
         try await wait("确认后聚焦可编辑源码") {
             editor = views(root).compactMap { $0 as? NSTextView }.first { $0.isEditable && $0.delegate is SourceEditor.Coordinator }
@@ -167,14 +190,38 @@ import EasyMarkdownCore
         try require(document.session.mode == .read && document.session.closed, "关闭后仍开始编辑")
     }
 
-    private static func respond(_ document: MarkdownDocument, accept: Bool) async throws {
+    private static func copyWithReturn(in web: WKWebView, document: MarkdownDocument, window: NSWindow) async throws {
+        let clipboard = NSPasteboard.general
+        let savedItems = (clipboard.pasteboardItems ?? []).map { item in
+            let saved = NSPasteboardItem()
+            for type in item.types { if let data = item.data(forType: type) { saved.setData(data, forType: type) } }
+            return saved
+        }
+        defer { clipboard.clearContents(); if !savedItems.isEmpty { clipboard.writeObjects(savedItems) } }
+        window.makeFirstResponder(web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.code-copy-button').focus();true")
+        send("\r", code: 36, window: window)
+        try await waitAsync("复制按钮回车激活") {
+            (try? await web.evaluateJavaScript("document.querySelector('.code-copy-button').dataset.copyState")) as? String == "success"
+        }
+        try require(prompt(document) == nil && document.session.mode == .read && clipboard.string(forType: .string) == "复制样例",
+                    "复制按钮的回车误触发编辑确认或未正确复制")
+        _ = try await web.evaluateJavaScript("document.activeElement.blur();true")
+    }
+
+    private static func respond(_ document: MarkdownDocument, accept: Bool, usingReturn: Bool = false) async throws {
         try await wait("只读编辑确认框，操作：" + (accept ? "确定" : "取消")) { prompt(document) != nil }
         guard let sheet = prompt(document), let root = sheet.contentView,
               let button = views(root).compactMap({ $0 as? NSButton }).first(where: { $0.title == L10n.text(accept ? "确定" : "取消") }) else {
             throw failure("只读确认缺少操作按钮")
         }
-        button.performClick(nil)
-        try await wait("只读确认结束并恢复文档焦点") {
+        if usingReturn {
+            try await wait("确认框获得键盘焦点") { sheet.isKeyWindow }
+            // 原生确认框获得焦点后仍可能正在展开，等待按键激活默认按钮可用。
+            try await Task.sleep(for: .milliseconds(250))
+            send("\r", code: 36, window: sheet)
+        } else { button.performClick(nil) }
+        try await wait("只读确认结束并恢复文档焦点：" + (usingReturn ? "回车确认" : accept ? "确定按钮" : "取消按钮")) {
             prompt(document) == nil && document.windowControllers.first?.window?.isKeyWindow == true
         }
     }
