@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>EasyMarkdown</title>
         <item>
+            <title>0.1.42</title>
+            <pubDate>Mon, 23 Nov 2026 16:47:05 +0800</pubDate>
+            <link>https://github.com/OldSixYao/EasyMarkdown</link>
+            <sparkle:version>43</sparkle:version>
+            <sparkle:shortVersionString>0.1.42</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<ul><li>拖动文档大纲与正文之间的分隔线，可调整两侧宽度。窄窗口会为阅读、源码和分栏预览保留可用空间，收起再展开大纲时会恢复本窗口的拖动设置。</li></ul>]]></description>
+            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.42/EasyMarkdown-0.1.42-arm64.dmg" length="2776328" type="application/octet-stream" sparkle:edSignature="KeEqGY6DXqOQJVkrYacVQsji/J+h56b+d5TT4nIm0u/3U+NeTnkhh3o3kak+PEAEpTvsnwwa4Ju12EpReiJIBA=="/>
+        </item>
+        <item>
             <title>0.1.40</title>
             <pubDate>Fri, 13 Nov 2026 15:49:46 +0800</pubDate>
             <link>https://github.com/OldSixYao/EasyMarkdown</link>
@@ -27,20 +38,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <description><![CDATA[<ul><li>已打开文档检测到外部修改后保留当前内容，通过所属文档的原生确认框询问是否更新；阅读、编辑和分栏模式统一处理。</li><li>点击“确定”重新读取并加载最新磁盘内容；点击“否”或退出键保留内容、选区、阅读位置和撤销记录，同一外部版本不重复提醒，新版本重新询问。</li><li>后台文档、最小化窗口及已有对话框延后提示；读取失败保留当前内容，继续编辑、另存为或关闭时取消过期载入；恢复草稿保留已检测到的外部版本，保存继续保护外部文件。</li><li>补齐简体、繁体和英文确认文案，更新功能说明与欢迎示例；增加核心状态和真实窗口回归，覆盖去重、连续外部修改、后台切换及读取期间的操作。</li></ul>]]></description>
             <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.36/EasyMarkdown-0.1.36-arm64.dmg" length="2766925" type="application/octet-stream" sparkle:edSignature="f+DhhdYEm9BGGqCKUzso9iFQhMIXb2CJfhlIA3KS8YS83t9gsv/E59lFICtmihVCY9R+v2BYIPngKBoonc4CCA=="/>
         </item>
-        <item>
-            <title>0.1.33</title>
-            <pubDate>Mon, 09 Nov 2026 20:15:15 +0800</pubDate>
-            <link>https://github.com/OldSixYao/EasyMarkdown</link>
-            <sparkle:version>34</sparkle:version>
-            <sparkle:shortVersionString>0.1.33</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<ul><li>文档底部状态栏改为在阅读、源码编辑和分栏模式下常驻显示全文总行数与字符数，外部内容刷新后同步更新。</li><li>原生文本视图在鼠标拖选过程中持续更新已选行数和字符数，更新在鼠标跟踪运行循环中生效，无需等待松开鼠标；键盘扩选与取消选择同步更新。</li><li>排版阅读新增可见文字选区统计，分栏中的选区统计跟随当前操作窗格；全文保持原文统计口径，字符数仍排除空白。</li><li>切换模式清理旧选区，外部版本预览继续独立；补充阅读选区、分栏切换和拖选期间实际状态栏文字的窗口检查。</li></ul>]]></description>
-            <enclosure url="https://github.com/OldSixYao/EasyMarkdown/releases/download/v0.1.33/EasyMarkdown-0.1.33-arm64.dmg" length="2757717" type="application/octet-stream" sparkle:edSignature="N5mQ8lCkRjzHYPxfKhiLRqSeODrbh1x7m+s74VRJw82f7oYgMUQCY1yUxMTUptgwjWHkk9mrvPIpBOsle84FCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: zNW3W+aTeV5KxDE6cc2ULRaJSEfycFP8um4/mGTqqWZ39/utJ4WoDSsWg5u3UakpzKVHvGUTcST1vhx+zaarCQ==
-length: 4810
+edSignature: AHLMwwRy8O+rfA3l9ESwNiBO2osbs3oq2B1FYReuUxxm+wKyeZ/Vpdtf0R0N8wMKd2k9ABD3J6weUWPfENiNCQ==
+length: 4333
 -->
