@@ -79,7 +79,9 @@ import EasyMarkdownCore
             NSDocumentController.shared.addDocument(doc)
             doc.makeWindowControllers(); doc.showWindows()
             NSApp.activate(ignoringOtherApps: true)
-            guard let root = doc.windowControllers.first?.window?.contentView else { throw Failure(message: "No window") }
+            guard let window = doc.windowControllers.first?.window, let root = window.contentView else {
+                throw Failure(message: "No window")
+            }
             var web: WKWebView?
             try await eventually {
                 web = descendants(root).compactMap { $0 as? WKWebView }.first
@@ -88,6 +90,8 @@ import EasyMarkdownCore
             }
             results.append("Markdown rendered in real WKWebView")
             guard let web else { throw Failure(message: "No reader") }
+            try await readerWidthProbe(web, in: window, originalSize: root.bounds.size)
+            results.append("阅读宽度全屏模式填满窗格并保留左右边距，随窗口缩放，也可切回固定宽度")
             doc.session.showOutline = true
             try await Task.sleep(for: .milliseconds(200))
             _ = try await web.evaluateJavaScript("window.scrollTo(0,0);updateActiveHeading();true")
@@ -393,6 +397,39 @@ import EasyMarkdownCore
             reader.callAsyncJavaScript(script, arguments: arguments, in: nil, in: .page) {
                 continuation.resume(with: $0)
             }
+        }
+    }
+
+    private static func readerWidthProbe(_ web: WKWebView, in window: NSWindow, originalSize: NSSize) async throws {
+        let defaults = EditorPreferences.store
+        let key = EditorPreferences.readerWidth
+        defer {
+            defaults.removeObject(forKey: key)
+            window.setContentSize(originalSize)
+        }
+        let wideSize = NSSize(width: 1200, height: originalSize.height)
+        window.setContentSize(wideSize)
+        try await eventually(description: "适中阅读宽度为 780") {
+            (try await web.evaluateJavaScript("innerWidth > 980 && content.clientWidth === 780")) as? Bool == true
+        }
+
+        defaults.set(0.0, forKey: key)
+        let fillsPane = """
+            content.clientWidth === document.documentElement.clientWidth &&
+                parseFloat(getComputedStyle(content).paddingLeft) > 0
+            """
+        try await eventually(description: "全屏阅读填满宽窗格并保留边距") {
+            (try await web.evaluateJavaScript("innerWidth > 980 && \(fillsPane)")) as? Bool == true
+        }
+        window.setContentSize(NSSize(width: 620, height: originalSize.height))
+        try await eventually(description: "全屏阅读跟随窄窗口") {
+            (try await web.evaluateJavaScript("innerWidth < 660 && \(fillsPane)")) as? Bool == true
+        }
+
+        defaults.set(980.0, forKey: key)
+        window.setContentSize(wideSize)
+        try await eventually(description: "从全屏切回宽松阅读宽度") {
+            (try await web.evaluateJavaScript("innerWidth > 980 && content.clientWidth === 980")) as? Bool == true
         }
     }
 

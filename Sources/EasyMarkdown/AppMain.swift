@@ -371,7 +371,7 @@ private typealias SettingsState<Value> = State<Value>
     @AppStorage(AppLanguage.preferenceKey) private var language = "system"
     @AppStorage("readerFontSize") var fontSize = 16.0
     @AppStorage("editorFontSize") var editorSize = 14.0
-    @AppStorage("readerWidth") var width = 780.0
+    @AppStorage(EditorPreferences.readerWidth, store: EditorPreferences.store) var width = EditorPreferences.defaultReaderWidth
     @AppStorage("remoteImages") var remoteImages = false
     @AppStorage("appearance") var appearance = "system"
     @AppStorage(EditorPreferences.showLineNumbers, store: EditorPreferences.store) private var showLineNumbers = true
@@ -412,7 +412,10 @@ private typealias SettingsState<Value> = State<Value>
                 .accessibilityIdentifier("document-tabs-enabled")
                 .onChange(of: documentTabsEnabled) { _, _ in DocumentTabCoordinator.shared.applyPreference() }
             Picker(L10n.text("阅读宽度"), selection: $width) {
-                Text(L10n.text("紧凑")).tag(660.0); Text(L10n.text("适中")).tag(780.0); Text(L10n.text("宽松")).tag(980.0)
+                Text(L10n.text("紧凑")).tag(660.0)
+                Text(L10n.text("适中")).tag(780.0)
+                Text(L10n.text("宽松")).tag(980.0)
+                Text(L10n.text("全屏")).tag(0.0)
             }
             Toggle(L10n.text("加载文档中的远程图片"), isOn: $remoteImages)
             Text(L10n.text("默认仅加载本地图片。开启后，会向图片所在的网站发送请求。"))

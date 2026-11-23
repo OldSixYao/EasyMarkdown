@@ -16,7 +16,7 @@ struct MarkdownPreview: NSViewRepresentable {
     let session: DocumentSession
     var overrideText: String? = nil
     @AppStorage("readerFontSize") private var fontSize = 16.0
-    @AppStorage("readerWidth") private var width = 780.0
+    @AppStorage(EditorPreferences.readerWidth, store: EditorPreferences.store) private var width = EditorPreferences.defaultReaderWidth
     @AppStorage("remoteImages") private var remoteImages = false
     @AppStorage("appearance") private var appearance = "system"
 

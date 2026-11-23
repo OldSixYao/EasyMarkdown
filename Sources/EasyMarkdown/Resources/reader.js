@@ -226,13 +226,14 @@ window.updateReaderPreferences = function(preferences, preservePosition = true) 
     preferences.language, preferences.strings]);
   if (styleKey === lastStyleKey) return;
   const position = preservePosition && content.childElementCount ? capturePosition() : null;
+  const maxWidth = preferences.width === 0 ? 'none' : preferences.width + 'px';
   const layoutChanged = document.documentElement.style.getPropertyValue('--size') !== preferences.fontSize + 'px' ||
-    document.documentElement.style.getPropertyValue('--width') !== preferences.width + 'px';
+    document.documentElement.style.getPropertyValue('--width') !== maxWidth;
   readerStrings = {...readerStrings, ...preferences.strings};
   document.documentElement.lang = preferences.language || 'zh-Hans';
   content.setAttribute('aria-label', readerStrings.content);
   document.documentElement.style.setProperty('--size', preferences.fontSize + 'px');
-  document.documentElement.style.setProperty('--width', preferences.width + 'px');
+  document.documentElement.style.setProperty('--width', maxWidth);
   document.documentElement.dataset.appearance = preferences.appearance;
   lastStyleKey = styleKey;
   if (layoutChanged) invalidateReaderSearchIndex();

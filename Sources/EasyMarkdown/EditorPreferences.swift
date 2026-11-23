@@ -1,6 +1,8 @@
 import Foundation
 
 @MainActor enum EditorPreferences {
+    static let readerWidth = "readerWidth"
+    static let defaultReaderWidth = 780.0
     static let showLineNumbers = "showLineNumbers"
     static let documentTabsEnabled = "documentTabsEnabled"
 
@@ -17,7 +19,8 @@ import Foundation
     static let store = checkSuite.flatMap(UserDefaults.init(suiteName:)) ?? .standard
 
     static func registerDefaults() {
-        store.register(defaults: [showLineNumbers: true, documentTabsEnabled: true])
+        // 注册适中档位，让首次选择全屏（0）也能触发宽度更新。
+        store.register(defaults: [readerWidth: defaultReaderWidth, showLineNumbers: true, documentTabsEnabled: true])
         #if DEBUG
         // Existing checks intentionally exercise several independent windows.
         if checkSuite != nil && !CommandLine.arguments.contains("--editor-workspace-test") {

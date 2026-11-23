@@ -6,6 +6,11 @@ struct DocumentView: View {
     @Bindable var session: DocumentSession
     @AppStorage("appearance") private var appearance = "system"
     @FocusState private var searchFocused: Bool
+    @State private var outlineWidth: CGFloat = 210
+
+    private static let minimumOutlineWidth: CGFloat = 128
+    private static let maximumOutlineWidth: CGFloat = 480
+    private static let minimumPaneWidth: CGFloat = 240
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,37 +23,7 @@ struct DocumentView: View {
             if session.recovery != nil { recoveryBanner }
             if session.state.hasConflict { conflictBanner }
             if session.showFind && session.mode == .read { findBar }
-            HStack(spacing: 0) {
-                if session.showOutline && session.kind == .markdown {
-                    outline.frame(width: 210)
-                    Divider()
-                }
-                // Keep the visible pane's identity when adding/removing its neighbor.
-                HSplitView {
-                    if session.mode != .read || session.usesNativeReader {
-                        SourceEditor(session: session, isReadOnly: session.mode == .read).frame(minWidth: 240)
-                    }
-                    if session.mode != .edit {
-                        if session.usesNativeReader {
-                            if session.mode == .split {
-                                SourceEditor(session: session, isReadOnly: true, isSecondary: true).frame(minWidth: 240)
-                            }
-                        } else {
-                            ZStack(alignment: .top) {
-                                if let snapshot = session.previewActivity.snapshot {
-                                    Image(nsImage: snapshot).resizable().scaledToFit()
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                                        .accessibilityHidden(true)
-                                }
-                                if session.previewActivity.isAwake {
-                                    MarkdownPreview(session: session)
-                                        .opacity(session.previewActivity.snapshot == nil ? 1 : 0)
-                                }
-                            }.frame(minWidth: 240)
-                        }
-                    }
-                }
-            }
+            documentPanes
             EditorStatusBar(session: session)
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -101,6 +76,50 @@ struct DocumentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             session.updateWindowActivity()
+        }
+    }
+
+    private var documentPanes: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                if session.showOutline && session.kind == .markdown {
+                    let contentMinimum = session.mode == .split ? 2 * Self.minimumPaneWidth + 1 : Self.minimumPaneWidth
+                    let available = geometry.size.width - contentMinimum - OutlineDivider.thickness
+                    let maximum = min(Self.maximumOutlineWidth, max(Self.minimumOutlineWidth, available))
+                    outline.frame(width: min(outlineWidth, maximum))
+                    OutlineDivider(outlineWidth: $outlineWidth, limits: Self.minimumOutlineWidth...maximum)
+                        .frame(width: OutlineDivider.thickness)
+                }
+                editorPanes
+            }
+        }
+    }
+
+    private var editorPanes: some View {
+        // Keep the visible pane's identity when adding/removing its neighbor.
+        HSplitView {
+            if session.mode != .read || session.usesNativeReader {
+                SourceEditor(session: session, isReadOnly: session.mode == .read).frame(minWidth: Self.minimumPaneWidth)
+            }
+            if session.mode != .edit {
+                if session.usesNativeReader {
+                    if session.mode == .split {
+                        SourceEditor(session: session, isReadOnly: true, isSecondary: true).frame(minWidth: Self.minimumPaneWidth)
+                    }
+                } else {
+                    ZStack(alignment: .top) {
+                        if let snapshot = session.previewActivity.snapshot {
+                            Image(nsImage: snapshot).resizable().scaledToFit()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                                .accessibilityHidden(true)
+                        }
+                        if session.previewActivity.isAwake {
+                            MarkdownPreview(session: session)
+                                .opacity(session.previewActivity.snapshot == nil ? 1 : 0)
+                        }
+                    }.frame(minWidth: Self.minimumPaneWidth)
+                }
+            }
         }
     }
 
